@@ -1,0 +1,48 @@
+# gcode configuration file
+# Place in: .gcode/config.yaml or ~/.config/gcode/config.yaml
+
+provider:
+  # OpenAI-compatible provider base URL
+  # Examples:
+  #   OpenAI:   https://api.openai.com/v1
+  #   Ollama:   http://localhost:11434/v1
+  #   Groq:     https://api.groq.com/openai/v1
+  base_url: https://api.openai.com/v1
+
+  # API key (or set via OPENAI_API_KEY env var)
+  api_key: ""
+
+  # Model to use
+  model: gpt-4o
+
+# Default agent: "build" or "explore" or any custom agent name
+default_agent: build
+
+# ─── MCP Servers ─────────────────────────────────────────────────────────────
+# Define Model Context Protocol servers to extend the tool set.
+mcp:
+  # Example: local MCP server via stdio
+  # my-tools:
+  #   type: local
+  #   command: ["npx", "-y", "@my-org/mcp-server"]
+  #   env:
+  #     MY_VAR: value
+  #   enabled: true
+  #   timeout_ms: 30000
+
+  # Example: remote MCP server via HTTP
+  # remote-server:
+  #   type: remote
+  #   url: https://my-mcp-server.example.com/mcp
+  #   headers:
+  #     Authorization: "Bearer my-token"
+  #   enabled: true
+
+# ─── Skills ──────────────────────────────────────────────────────────────────
+# Additional directories to scan for SKILL.md files.
+# Standard locations are always scanned automatically:
+#   .agents/skills/, .claude/skills/, .opencode/skill/
+skills:
+  paths: []
+  # paths:
+  #   - ~/my-custom-skills
