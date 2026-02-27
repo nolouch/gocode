@@ -101,11 +101,15 @@ func run(workDir, agentName, oneShot string) error {
 	}
 
 	// LLM client
-	lc := llm.New(llm.Config{
-		BaseURL: cfg.Provider.BaseURL,
-		APIKey:  cfg.Provider.APIKey,
-		Model:   cfg.Provider.Model,
+	lc, err := llm.New(llm.Config{
+		ProviderName: cfg.Provider.Name,
+		BaseURL:      cfg.Provider.BaseURL,
+		APIKey:       cfg.Provider.APIKey,
+		Model:        cfg.Provider.Model,
 	})
+	if err != nil {
+		return fmt.Errorf("llm: %w", err)
+	}
 
 	// Agent loop runner
 	runner := &loop.Runner{

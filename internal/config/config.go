@@ -30,8 +30,9 @@ type Config struct {
 
 // ProviderConfig holds LLM API settings.
 type ProviderConfig struct {
-	BaseURL string `yaml:"base_url"` // default: https://api.openai.com/v1
-	APIKey  string `yaml:"api_key"`  // overridden by OPENAI_API_KEY env var
+	Name    string `yaml:"name"`     // provider name: openai, anthropic, google, openrouter, openai-compat
+	BaseURL string `yaml:"base_url"` // default: https://api.openai.com/v1 (for openai-compat)
+	APIKey  string `yaml:"api_key"`  // overridden by env vars
 	Model   string `yaml:"model"`    // default: gpt-4o
 }
 
@@ -55,6 +56,7 @@ type SkillsConfig struct {
 func Default() *Config {
 	return &Config{
 		Provider: ProviderConfig{
+			Name:    "openai",
 			BaseURL: "https://api.openai.com/v1",
 			Model:   "gpt-4o",
 		},
@@ -69,6 +71,7 @@ func Load(workDir string) (*Config, error) {
 	candidates := []string{
 		filepath.Join(workDir, ".gcode", "config.yaml"),
 		filepath.Join(workDir, ".opencode", "config.yaml"),
+		filepath.Join(workDir, "config.yaml"),
 		filepath.Join(os.Getenv("HOME"), ".config", "gcode", "config.yaml"),
 	}
 	for _, path := range candidates {
@@ -88,9 +91,27 @@ func Load(workDir string) (*Config, error) {
 	// Env overrides
 	if v := os.Getenv("OPENAI_API_KEY"); v != "" && cfg.Provider.APIKey == "" {
 		cfg.Provider.APIKey = v
+		if cfg.Provider.Name == "" {
+			cfg.Provider.Name = "openai"
+		}
 	}
 	if v := os.Getenv("ANTHROPIC_API_KEY"); v != "" && cfg.Provider.APIKey == "" {
 		cfg.Provider.APIKey = v
+		if cfg.Provider.Name == "" {
+			cfg.Provider.Name = "anthropic"
+		}
+	}
+	if v := os.Getenv("GOOGLE_API_KEY"); v != "" && cfg.Provider.APIKey == "" {
+		cfg.Provider.APIKey = v
+		if cfg.Provider.Name == "" {
+			cfg.Provider.Name = "google"
+		}
+	}
+	if v := os.Getenv("OPENROUTER_API_KEY"); v != "" && cfg.Provider.APIKey == "" {
+		cfg.Provider.APIKey = v
+		if cfg.Provider.Name == "" {
+			cfg.Provider.Name = "openrouter"
+		}
 	}
 	if v := os.Getenv("GCODE_MODEL"); v != "" {
 		cfg.Provider.Model = v

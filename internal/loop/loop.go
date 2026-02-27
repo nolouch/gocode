@@ -88,6 +88,12 @@ func (r *Runner) Run(ctx context.Context, sessionID string, userText string, age
 	// the LLM always sees tool results.
 	var extraMessages []model.ChatMessage // tool-result messages from previous step
 
+	// Cross-step doom loop detection: track last tool signature
+	type stepSig struct{ tool, output string }
+	var lastSig stepSig
+	consecutiveSame := 0
+	const crossStepThreshold = 3
+
 	step := 0
 	for {
 		step++
@@ -163,6 +169,28 @@ func (r *Runner) Run(ctx context.Context, sessionID string, userText string, age
 		result, toolMsgs := proc.Process(ctx, streamCh, effectiveTools, sess.Directory)
 		extraMessages = toolMsgs
 
+		// Cross-step doom loop detection
+		if len(toolMsgs) == 1 {
+			contentStr, _ := toolMsgs[0].Content.(string)
+			sig := stepSig{
+				tool:   toolMsgs[0].Name,
+				output: contentStr,
+			}
+			if sig == lastSig {
+				consecutiveSame++
+				if consecutiveSame >= crossStepThreshold {
+					fmt.Printf("\n[warn] cross-step doom loop detected for tool %s, stopping\n", sig.tool)
+					break
+				}
+			} else {
+				lastSig = sig
+				consecutiveSame = 1
+			}
+		} else {
+			lastSig = stepSig{}
+			consecutiveSame = 0
+		}
+
 		switch result {
 		case model.ProcessResultStop:
 			break // inner
@@ -191,7 +219,16 @@ func buildSystemPrompt(ag *agent.Info, extras []string, workDir string) []string
 	base := fmt.Sprintf(`You are gcode, an expert AI coding assistant.
 Current working directory: %s
 You can use tools to read files, write files, run commands, and explore the codebase.
-Think step-by-step. Be concise.`, workDir)
+Think step-by-step. Be concise.
+
+IMPORTANT - Tool Calling Format:
+When you call a tool, you MUST provide ALL required arguments in JSON format.
+Example:
+{"name": "read_file", "parameters": {"path": "main.go"}}
+{"name": "list_dir", "parameters": {"path": "."}}
+{"name": "bash", "parameters": {"command": "ls -la"}}
+
+NEVER call a tool without arguments. Always include the required parameters.`, workDir)
 
 	if ag.Prompt != "" {
 		base += "\n" + ag.Prompt

@@ -90,13 +90,18 @@ func (t *ReadFileTool) Schema() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"path": map[string]any{"type": "string", "description": "Absolute or relative path to the file"},
+			"path": map[string]any{
+				"type":        "string",
+				"description": "Absolute or relative path to the file",
+			},
 		},
-		"required": []string{"path"},
 	}
 }
 func (t *ReadFileTool) Execute(ctx Context, args map[string]any) (Result, error) {
 	p, _ := args["path"].(string)
+	if p == "" {
+		return Result{IsError: true, Output: "read_file requires a 'path' parameter. Example: {\"path\": \"main.go\"}"}, nil
+	}
 	if !filepath.IsAbs(p) {
 		p = filepath.Join(ctx.WorkDir, p)
 	}
@@ -119,12 +124,14 @@ func (t *WriteFileTool) Schema() map[string]any {
 			"path":    map[string]any{"type": "string", "description": "Path to the file"},
 			"content": map[string]any{"type": "string", "description": "Content to write"},
 		},
-		"required": []string{"path", "content"},
 	}
 }
 func (t *WriteFileTool) Execute(ctx Context, args map[string]any) (Result, error) {
 	p, _ := args["path"].(string)
 	content, _ := args["content"].(string)
+	if p == "" || content == "" {
+		return Result{IsError: true, Output: "write_file requires 'path' and 'content' parameters. Example: {\"path\": \"file.txt\", \"content\": \"hello\"}"}, nil
+	}
 	if !filepath.IsAbs(p) {
 		p = filepath.Join(ctx.WorkDir, p)
 	}
@@ -146,13 +153,19 @@ func (t *ListDirTool) Schema() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"path": map[string]any{"type": "string", "description": "Directory path"},
+			"path": map[string]any{
+				"type":        "string",
+				"description": "Directory path (defaults to current working directory)",
+			},
 		},
-		"required": []string{"path"},
 	}
 }
 func (t *ListDirTool) Execute(ctx Context, args map[string]any) (Result, error) {
 	p, _ := args["path"].(string)
+	// Default to current directory if not provided
+	if p == "" {
+		p = ctx.WorkDir
+	}
 	if !filepath.IsAbs(p) {
 		p = filepath.Join(ctx.WorkDir, p)
 	}
@@ -190,11 +203,13 @@ func (t *BashTool) Schema() map[string]any {
 			"command":    map[string]any{"type": "string", "description": "Shell command to execute"},
 			"timeout_ms": map[string]any{"type": "integer", "description": "Timeout in milliseconds (default 30000)"},
 		},
-		"required": []string{"command"},
 	}
 }
 func (t *BashTool) Execute(ctx Context, args map[string]any) (Result, error) {
 	cmd, _ := args["command"].(string)
+	if cmd == "" {
+		return Result{IsError: true, Output: "bash requires a 'command' parameter. Example: {\"command\": \"ls -la\"}"}, nil
+	}
 
 	c := exec.CommandContext(ctx.Ctx, "bash", "-c", cmd)
 	c.Dir = ctx.WorkDir
