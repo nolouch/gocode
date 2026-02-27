@@ -1,51 +1,34 @@
-// Package llm provides an OpenAI-compatible streaming LLM client using raw
-// HTTP SSE, mirroring OpenCode's LLM.stream().
+// Package llm provides a multi-provider streaming LLM client using charm.land/fantasy.
 //
-// It supports any OpenAI-compatible provider (OpenAI, Anthropic via proxy,
-// Ollama, etc.) by accepting a base URL + model ID.
+// It supports OpenAI, Anthropic, Google, OpenRouter, and any OpenAI-compatible provider.
 package llm
 
 import (
-	"bufio"
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
-	"strings"
-	"time"
 
+	"charm.land/fantasy"
 	"github.com/nolouch/gcode/internal/model"
 	"github.com/nolouch/gcode/internal/tool"
 )
 
 // Config holds provider connection details.
 type Config struct {
-	BaseURL string // e.g. "https://api.openai.com/v1"
-	APIKey  string
-	Model   string // e.g. "gpt-4o"
+	ProviderName string // "openai", "anthropic", "google", "openrouter", "openai-compat"
+	BaseURL      string // for openai-compat or custom endpoints
+	APIKey       string
+	Model        string // e.g. "gpt-4o", "claude-3-5-sonnet-20241022"
 }
 
-// ToolDef is the JSON representation of a tool for the LLM API.
-type ToolDef struct {
-	Type     string          `json:"type"`
-	Function ToolFunctionDef `json:"function"`
-}
-
-// ToolFunctionDef describes a single function tool.
-type ToolFunctionDef struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description"`
-	Parameters  map[string]any `json:"parameters"`
-}
-
-// StreamEvent is one parsed event from the SSE stream.
+// StreamEvent is one parsed event from the stream.
 type StreamEvent struct {
 	Type string
 
 	// TypeTextDelta
 	TextDelta string
+
+	// TypeReasoningDelta - for models that output thinking/reasoning
+	ReasoningDelta string
 
 	// TypeToolCallStart / TypeToolCallDelta / TypeToolCallDone
 	ToolCallID   string
@@ -62,60 +45,37 @@ type StreamEvent struct {
 
 // Event type constants.
 const (
-	TypeTextDelta     = "text-delta"
-	TypeToolCallStart = "tool-call-start"
-	TypeToolCallDelta = "tool-call-delta"
-	TypeToolCallDone  = "tool-call-done"
-	TypeStepFinish    = "step-finish"
-	TypeError         = "error"
+	TypeTextDelta      = "text-delta"
+	TypeReasoningDelta = "reasoning-delta"
+	TypeToolCallStart  = "tool-call-start"
+	TypeToolCallDelta  = "tool-call-delta"
+	TypeToolCallDone   = "tool-call-done"
+	TypeStepFinish     = "step-finish"
+	TypeError          = "error"
 )
 
-// ─── OpenAI SSE wire types ────────────────────
-
-type chatCompletionChunk struct {
-	Choices []struct {
-		Delta struct {
-			Role      string          `json:"role"`
-			Content   string          `json:"content"`
-			ToolCalls []toolCallChunk `json:"tool_calls"`
-		} `json:"delta"`
-		FinishReason *string `json:"finish_reason"`
-	} `json:"choices"`
-	Usage *usageChunk `json:"usage"`
-}
-
-type toolCallChunk struct {
-	Index    int    `json:"index"`
-	ID       string `json:"id"`
-	Type     string `json:"type"`
-	Function struct {
-		Name      string `json:"name"`
-		Arguments string `json:"arguments"`
-	} `json:"function"`
-}
-
-type usageChunk struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
-}
-
-// ─────────────────────────────────────────────
-// Client
-// ─────────────────────────────────────────────
-
-// Client wraps an OpenAI-compatible API endpoint.
+// Client wraps a fantasy.LanguageModel.
 type Client struct {
-	cfg        Config
-	httpClient *http.Client
+	model fantasy.LanguageModel
+	cfg   Config
 }
 
-// New creates a new LLM Client.
-func New(cfg Config) *Client {
-	return &Client{
-		cfg:        cfg,
-		httpClient: &http.Client{Timeout: 10 * time.Minute},
+// New creates a new LLM Client using fantasy SDK.
+func New(cfg Config) (*Client, error) {
+	provider, err := BuildProvider(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("build provider: %w", err)
 	}
+
+	model, err := provider.LanguageModel(context.Background(), cfg.Model)
+	if err != nil {
+		return nil, fmt.Errorf("get language model: %w", err)
+	}
+
+	return &Client{
+		model: model,
+		cfg:   cfg,
+	}, nil
 }
 
 // StreamInput is the full set of parameters for one LLM call.
@@ -130,203 +90,228 @@ type StreamInput struct {
 // Stream calls the LLM and returns a channel of StreamEvents.
 // The caller must drain the channel until it is closed.
 func (c *Client) Stream(input StreamInput) (<-chan StreamEvent, error) {
-	// Build the request body
-	body, err := c.buildRequest(input)
+	call, err := c.buildCall(input)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("build call: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(input.Abort,
-		http.MethodPost,
-		c.cfg.BaseURL+"/chat/completions",
-		bytes.NewReader(body),
-	)
+	streamResp, err := c.model.Stream(input.Abort, call)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("stream: %w", err)
 	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+c.cfg.APIKey)
-	httpReq.Header.Set("Accept", "text/event-stream")
 
-	resp, err := c.httpClient.Do(httpReq)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		data, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		return nil, fmt.Errorf("LLM API error %d: %s", resp.StatusCode, data)
-	}
+	Debug("Stream started with model=%s provider=%s", c.model.Model(), c.model.Provider())
 
 	ch := make(chan StreamEvent, 64)
-	go c.readSSE(resp.Body, ch)
+	go c.processStream(streamResp, ch)
 	return ch, nil
 }
 
-// buildRequest serialises the API request body.
-func (c *Client) buildRequest(input StreamInput) ([]byte, error) {
-	messages := make([]map[string]any, 0)
+// buildCall converts StreamInput to fantasy.Call
+func (c *Client) buildCall(input StreamInput) (fantasy.Call, error) {
+	// Build prompt (messages)
+	var prompt fantasy.Prompt
 
 	// System messages
 	for _, s := range input.System {
 		if s != "" {
-			messages = append(messages, map[string]any{
-				"role":    "system",
-				"content": s,
-			})
+			prompt = append(prompt, fantasy.NewSystemMessage(s))
 		}
 	}
 
 	// Conversation messages
 	for _, m := range input.Messages {
-		msg := map[string]any{
-			"role":    m.Role,
-			"content": m.Content,
+		msg, err := c.convertMessage(m)
+		if err != nil {
+			return fantasy.Call{}, fmt.Errorf("convert message: %w", err)
 		}
-		if len(m.ToolCalls) > 0 {
-			msg["tool_calls"] = m.ToolCalls
-		}
-		if m.ToolCallID != "" {
-			msg["tool_call_id"] = m.ToolCallID
-		}
-		if m.Name != "" {
-			msg["name"] = m.Name
-		}
-		messages = append(messages, msg)
+		prompt = append(prompt, msg)
 	}
 
-	// Tool definitions
-	var tools []ToolDef
+	// Build tools
+	var tools []fantasy.Tool
 	for _, t := range input.Tools {
-		tools = append(tools, ToolDef{
-			Type: "function",
-			Function: ToolFunctionDef{
-				Name:        t.ID(),
-				Description: t.Description(),
-				Parameters:  t.Schema(),
-			},
+		tools = append(tools, fantasy.FunctionTool{
+			Name:        t.ID(),
+			Description: t.Description(),
+			InputSchema: t.Schema(),
 		})
 	}
 
-	req := map[string]any{
-		"model":    c.cfg.Model,
-		"messages": messages,
-		"stream":   true,
-		"stream_options": map[string]any{
-			"include_usage": true,
-		},
-	}
-	if len(tools) > 0 {
-		req["tools"] = tools
+	// Build call
+	call := fantasy.Call{
+		Prompt: prompt,
+		Tools:  tools,
 	}
 	if input.MaxTokens > 0 {
-		req["max_tokens"] = input.MaxTokens
+		maxTokens := int64(input.MaxTokens)
+		call.MaxOutputTokens = &maxTokens
 	}
 
-	return json.Marshal(req)
+	return call, nil
 }
 
-// readSSE parses the SSE stream and sends events to ch.
-func (c *Client) readSSE(body io.ReadCloser, ch chan<- StreamEvent) {
-	defer body.Close()
+// convertMessage converts model.ChatMessage to fantasy.Message
+func (c *Client) convertMessage(m model.ChatMessage) (fantasy.Message, error) {
+	msg := fantasy.Message{
+		Role: fantasy.MessageRole(m.Role),
+	}
+
+	// Handle content
+	switch content := m.Content.(type) {
+	case string:
+		if content != "" {
+			msg.Content = append(msg.Content, fantasy.TextPart{Text: content})
+		}
+	case []interface{}:
+		// Multi-part content (images, etc.) - for now just extract text
+		for _, part := range content {
+			if partMap, ok := part.(map[string]interface{}); ok {
+				if partMap["type"] == "text" {
+					if text, ok := partMap["text"].(string); ok {
+						msg.Content = append(msg.Content, fantasy.TextPart{Text: text})
+					}
+				}
+			}
+		}
+	}
+
+	// Handle tool calls (assistant messages)
+	if len(m.ToolCalls) > 0 {
+		for _, tc := range m.ToolCalls {
+			// Ensure arguments is a valid JSON object, not "null" string
+			args := tc.Function.Arguments
+			if args == "" || args == "null" {
+				args = "{}"
+			}
+			Debug("tool call: id=%s name=%s args=%s", tc.ID, tc.Function.Name, args)
+			msg.Content = append(msg.Content, fantasy.ToolCallPart{
+				ToolCallID: tc.ID,
+				ToolName:   tc.Function.Name,
+				Input:      args,
+			})
+		}
+	}
+
+	// Handle tool results (tool messages)
+	if m.ToolCallID != "" {
+		// This is a tool result message
+		contentStr := ""
+		if str, ok := m.Content.(string); ok {
+			contentStr = str
+		}
+		msg.Content = append(msg.Content, fantasy.ToolResultPart{
+			ToolCallID: m.ToolCallID,
+			Output:     fantasy.ToolResultOutputContentText{Text: contentStr},
+		})
+	}
+
+	return msg, nil
+}
+
+// processStream converts fantasy.StreamPart to StreamEvent
+func (c *Client) processStream(streamResp fantasy.StreamResponse, ch chan<- StreamEvent) {
 	defer close(ch)
 
-	scanner := bufio.NewScanner(body)
-	scanner.Buffer(make([]byte, 1<<20), 1<<20)
+	// Track tool calls across stream parts
+	toolCalls := make(map[string]*toolCallState)
 
-	// Track partial tool calls across chunks
-	toolCalls := make(map[int]struct {
-		id   string
-		name string
-		args strings.Builder
-	})
+	// Use range syntax - Go 1.23+ transforms this to function call
+	for part := range streamResp {
+		Debug("stream part: type=%s delta=%q id=%q toolName=%q toolInput=%q finish=%q",
+			part.Type, part.Delta, part.ID, part.ToolCallName, part.ToolCallInput, part.FinishReason)
 
-	for scanner.Scan() {
-		line := scanner.Text()
-		if !strings.HasPrefix(line, "data: ") {
-			continue
-		}
-		data := strings.TrimPrefix(line, "data: ")
-		if data == "[DONE]" {
-			break
-		}
-
-		var chunk chatCompletionChunk
-		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+		// Handle errors
+		if part.Error != nil {
+			Debug("stream error: %v", part.Error)
+			ch <- StreamEvent{Type: TypeError, Err: part.Error}
 			continue
 		}
 
-		// Usage at end of stream
-		if chunk.Usage != nil {
+		switch part.Type {
+		case fantasy.StreamPartTypeReasoningDelta:
 			ch <- StreamEvent{
-				Type: TypeStepFinish,
+				Type:           TypeReasoningDelta,
+				ReasoningDelta: part.Delta,
+			}
+
+		case fantasy.StreamPartTypeTextDelta:
+			ch <- StreamEvent{
+				Type:      TypeTextDelta,
+				TextDelta: part.Delta,
+			}
+
+		case fantasy.StreamPartTypeToolInputStart:
+			// New tool call starting
+			toolCalls[part.ID] = &toolCallState{
+				id:   part.ID,
+				name: part.ToolCallName,
+			}
+			ch <- StreamEvent{
+				Type:         TypeToolCallStart,
+				ToolCallID:   part.ID,
+				ToolCallName: part.ToolCallName,
+			}
+
+		case fantasy.StreamPartTypeToolInputDelta:
+			// Tool input delta
+			delta := part.Delta
+			if delta == "" {
+				// Some providers send tool input in ToolCallInput rather than Delta.
+				delta = part.ToolCallInput
+			}
+			if tc, ok := toolCalls[part.ID]; ok {
+				tc.input += delta
+			}
+			ch <- StreamEvent{
+				Type:       TypeToolCallDelta,
+				ToolCallID: part.ID,
+				ArgsDelta:  delta,
+			}
+
+		case fantasy.StreamPartTypeToolInputEnd, fantasy.StreamPartTypeToolCall:
+			// Tool call complete
+			if tc, ok := toolCalls[part.ID]; ok {
+				if tc.name == "" && part.ToolCallName != "" {
+					tc.name = part.ToolCallName
+				}
+				// Prefer part.ToolCallInput (full input from provider) over accumulated deltas.
+				// Some models (e.g. MiniMax) send the full input only in the final ToolCall
+				// event without emitting any delta events first.
+				finalInput := tc.input
+				if part.ToolCallInput != "" {
+					finalInput = part.ToolCallInput
+				}
+				if part.Type == fantasy.StreamPartTypeToolInputEnd && finalInput == "" {
+					// Wait for a subsequent ToolCall event that may carry full input.
+					continue
+				}
+				ch <- StreamEvent{
+					Type:         TypeToolCallDone,
+					ToolCallID:   tc.id,
+					ToolCallName: tc.name,
+					ArgsDelta:    finalInput,
+				}
+				delete(toolCalls, part.ID)
+			}
+
+		case fantasy.StreamPartTypeFinish:
+			// Stream finished
+			ch <- StreamEvent{
+				Type:         TypeStepFinish,
+				FinishReason: string(part.FinishReason),
 				Usage: model.TokenUsage{
-					Input:  chunk.Usage.PromptTokens,
-					Output: chunk.Usage.CompletionTokens,
+					Input:  int(part.Usage.InputTokens),
+					Output: int(part.Usage.OutputTokens),
 				},
 			}
 		}
-
-		for _, choice := range chunk.Choices {
-			// Text delta
-			if choice.Delta.Content != "" {
-				ch <- StreamEvent{Type: TypeTextDelta, TextDelta: choice.Delta.Content}
-			}
-
-			// Tool call chunks
-			for _, tc := range choice.Delta.ToolCalls {
-				idx := tc.Index
-				entry := toolCalls[idx]
-				if tc.ID != "" {
-					entry.id = tc.ID
-				}
-				if tc.Function.Name != "" {
-					entry.name = tc.Function.Name
-					ch <- StreamEvent{
-						Type:         TypeToolCallStart,
-						ToolCallID:   entry.id,
-						ToolCallName: entry.name,
-					}
-				}
-				if tc.Function.Arguments != "" {
-					entry.args.WriteString(tc.Function.Arguments)
-					ch <- StreamEvent{
-						Type:       TypeToolCallDelta,
-						ToolCallID: entry.id,
-						ArgsDelta:  tc.Function.Arguments,
-					}
-				}
-				toolCalls[idx] = entry
-			}
-
-			// Finish
-			if choice.FinishReason != nil {
-				reason := *choice.FinishReason
-
-				// Emit tool-call-done for each pending tool call
-				for _, tc := range toolCalls {
-					ch <- StreamEvent{
-						Type:         TypeToolCallDone,
-						ToolCallID:   tc.id,
-						ToolCallName: tc.name,
-						ArgsDelta:    tc.args.String(),
-					}
-				}
-				toolCalls = make(map[int]struct {
-					id   string
-					name string
-					args strings.Builder
-				})
-
-				ch <- StreamEvent{
-					Type:         TypeStepFinish,
-					FinishReason: reason,
-				}
-			}
-		}
 	}
+}
 
-	if err := scanner.Err(); err != nil {
-		ch <- StreamEvent{Type: TypeError, Err: err}
-	}
+// toolCallState tracks partial tool call data during streaming
+type toolCallState struct {
+	id    string
+	name  string
+	input string
 }

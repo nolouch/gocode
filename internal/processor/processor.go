@@ -43,6 +43,13 @@ func (p *Processor) Process(
 		toolParts       = make(map[string]*model.Part) // callID -> part
 		toolArgsAcc     = make(map[string]*strings.Builder)
 		toolMessages    []model.ChatMessage // tool results to append to history
+
+		// Thinking tracking
+		thinkingStart   time.Time
+		thinkingContent strings.Builder
+
+		// Tool tracking
+		toolStartTimes = make(map[string]time.Time)
 	)
 
 	partID := func() string { return session.NewID() }
@@ -58,7 +65,25 @@ func (p *Processor) Process(
 		}
 
 		switch event.Type {
+		case llm.TypeReasoningDelta:
+			// Stream thinking content
+			if thinkingContent.Len() == 0 {
+				thinkingStart = time.Now()
+				fmt.Print(ThinkingHeader.Render("💭 Thinking: "))
+			}
+			thinkingContent.WriteString(event.ReasoningDelta)
+			// Print content chunk
+			fmt.Print(event.ReasoningDelta)
+
 		case llm.TypeTextDelta:
+			// Close thinking block if it was open
+			if thinkingContent.Len() > 0 {
+				duration := time.Since(thinkingStart).Round(time.Millisecond * 100)
+				// Print duration
+				fmt.Println()
+				fmt.Println(ThinkingDone.Render("✓ done (" + duration.String() + ")"))
+				thinkingContent.Reset()
+			}
 			if currentTextPart == nil {
 				pt := model.Part{
 					ID:        partID(),
@@ -76,8 +101,20 @@ func (p *Processor) Process(
 			fmt.Print(event.TextDelta) // stream to stdout
 
 		case llm.TypeToolCallStart:
-			fmt.Printf("\n[tool] %s", event.ToolCallName)
+			// Close thinking block if it was open
+			if thinkingContent.Len() > 0 {
+				duration := time.Since(thinkingStart).Round(time.Millisecond * 100)
+				fmt.Println()
+				fmt.Println(ThinkingDone.Render("✓ done (" + duration.String() + ")"))
+				thinkingContent.Reset()
+			}
+
 			toolArgsAcc[event.ToolCallID] = &strings.Builder{}
+			toolStartTimes[event.ToolCallID] = time.Now()
+			// Print tool with running state
+			fmt.Printf("\n%s %s\n",
+				RunningIcon.Render("●"),
+				ToolHeader.Render("Tool: "+event.ToolCallName))
 			pt := model.Part{
 				ID:        partID(),
 				SessionID: p.Message.SessionID,
@@ -94,16 +131,46 @@ func (p *Processor) Process(
 			p.store.UpdateMessage(p.Message)
 
 		case llm.TypeToolCallDelta:
-			toolArgsAcc[event.ToolCallID].WriteString(event.ArgsDelta)
+			if b, ok := toolArgsAcc[event.ToolCallID]; ok {
+				b.WriteString(event.ArgsDelta)
+			}
 
 		case llm.TypeToolCallDone:
 			tp, ok := toolParts[event.ToolCallID]
 			if !ok {
 				continue
 			}
-			argsRaw := toolArgsAcc[event.ToolCallID].String()
+			argsRaw := strings.TrimSpace(toolArgsAcc[event.ToolCallID].String())
+			if argsRaw == "" {
+				// Some providers only send full arguments in the final tool-done event.
+				argsRaw = strings.TrimSpace(event.ArgsDelta)
+			}
+			if argsRaw == "" {
+				argsRaw = "{}"
+			}
 			var args map[string]any
-			_ = json.Unmarshal([]byte(argsRaw), &args)
+			if err := json.Unmarshal([]byte(argsRaw), &args); err != nil {
+				errMsg := fmt.Sprintf("invalid tool args JSON: %v; raw=%q", err, argsRaw)
+				fmt.Printf("%s %s\n", ErrorIcon.Render("✗"), ToolHeader.Render("Tool: "+event.ToolCallName))
+				fmt.Printf("[tool-error] %s\n", errMsg)
+
+				tp.Tool.State = model.ToolStateError
+				tp.Tool.Input = map[string]any{}
+				tp.Tool.Error = errMsg
+				tp.Tool.EndAt = time.Now()
+				p.store.UpsertPart(p.Message.SessionID, p.Message.ID, *tp)
+
+				toolMessages = append(toolMessages, model.ChatMessage{
+					Role:       "tool",
+					ToolCallID: event.ToolCallID,
+					Name:       event.ToolCallName,
+					Content:    errMsg,
+				})
+				continue
+			}
+			if args == nil {
+				args = map[string]any{}
+			}
 
 			// Mark running
 			tp.Tool.State = model.ToolStateRunning
@@ -140,15 +207,34 @@ func (p *Processor) Process(
 			}
 
 			// Mark completed / error
+			startTime, hasStart := toolStartTimes[event.ToolCallID]
+			var duration string
+			if hasStart {
+				duration = time.Since(startTime).Round(time.Millisecond * 100).String()
+			}
 			if result.IsError {
-				fmt.Printf(" ✗\n[tool-error] %s\n", result.Output)
+				fmt.Printf("%s %s (%s)\n",
+					ErrorIcon.Render("✗"),
+					ToolHeader.Render("Tool: "+event.ToolCallName),
+					duration)
+				fmt.Printf("[tool-error] %s\n", result.Output)
 				tp.Tool.State = model.ToolStateError
 				tp.Tool.Error = result.Output
 			} else {
-				fmt.Printf(" ✓\n")
+				fmt.Printf("%s %s (%s)\n",
+					SuccessIcon.Render("✓"),
+					ToolHeader.Render("Tool: "+event.ToolCallName),
+					duration)
+				// Print tool output (truncated if too long)
+				output := result.Output
+				if len(output) > 500 {
+					output = output[:500] + "\n... (truncated)"
+				}
+				fmt.Printf("%s\n", output)
 				tp.Tool.State = model.ToolStateCompleted
 				tp.Tool.Output = result.Output
 			}
+			delete(toolStartTimes, event.ToolCallID)
 			tp.Tool.EndAt = time.Now()
 			p.store.UpsertPart(p.Message.SessionID, p.Message.ID, *tp)
 
@@ -183,6 +269,7 @@ func (p *Processor) Process(
 				event.FinishReason, event.Usage.Input, event.Usage.Output)
 
 		case llm.TypeError:
+			fmt.Printf("\n[error] LLM API error: %v\n", event.Err)
 			p.Message.Error = &model.AgentError{
 				Name:      "APIError",
 				Message:   event.Err.Error(),
