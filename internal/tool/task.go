@@ -14,8 +14,10 @@ type TaskRequest struct {
 }
 
 type TaskResult struct {
-	TaskID string
-	Output string
+	TaskID     string
+	Output     string
+	Subagent   string
+	DurationMs int64
 }
 
 // TaskTool launches a subagent task and returns the subagent response.
@@ -65,11 +67,17 @@ func (t *TaskTool) Execute(ctx Context, args map[string]any) (Result, error) {
 	}
 
 	payload := fmt.Sprintf("task_id: %s\n\n<task_result>\n%s\n</task_result>", out.TaskID, strings.TrimSpace(out.Output))
+	metaSubagent := out.Subagent
+	if metaSubagent == "" {
+		metaSubagent = subagent
+	}
 	return Result{
 		Output: payload,
 		Title:  description,
 		Metadata: map[string]any{
-			"task_id": out.TaskID,
+			"task_id":     out.TaskID,
+			"subagent":    metaSubagent,
+			"duration_ms": out.DurationMs,
 		},
 	}, nil
 }

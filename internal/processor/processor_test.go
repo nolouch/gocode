@@ -2,6 +2,7 @@ package processor
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -46,6 +47,52 @@ func TestProcess_UsesArgsFromToolCallDoneEvent(t *testing.T) {
 	}
 	if len(toolMsgs) != 1 {
 		t.Fatalf("expected 1 tool message, got %d", len(toolMsgs))
+	}
+}
+
+func TestProcess_TaskToolInvokesRunTask(t *testing.T) {
+	store := session.NewStore()
+	sess := store.CreateSession(".")
+
+	msg := &model.Message{
+		ID:        session.NewID(),
+		SessionID: sess.ID,
+		Role:      model.RoleAssistant,
+		CreatedAt: time.Now(),
+		Agent:     "build",
+	}
+	store.AddMessage(msg)
+
+	streamCh := make(chan llm.StreamEvent, 4)
+	streamCh <- llm.StreamEvent{Type: llm.TypeToolCallStart, ToolCallID: "call-task", ToolCallName: "task"}
+	streamCh <- llm.StreamEvent{Type: llm.TypeToolCallDone, ToolCallID: "call-task", ToolCallName: "task", ArgsDelta: `{"description":"Analyze API","prompt":"Find handlers","subagent_type":"explore"}`}
+	streamCh <- llm.StreamEvent{Type: llm.TypeStepFinish, FinishReason: "tool_calls"}
+	close(streamCh)
+
+	proc := New(store, nil, msg)
+	runTaskCalled := false
+	proc.RunTask = func(_ context.Context, req tool.TaskRequest) (tool.TaskResult, error) {
+		runTaskCalled = true
+		if req.Subagent != "explore" {
+			t.Fatalf("unexpected subagent %q", req.Subagent)
+		}
+		return tool.TaskResult{TaskID: "task-sess-1", Output: "subagent completed", Subagent: req.Subagent, DurationMs: 42}, nil
+	}
+
+	result, toolMsgs := proc.Process(context.Background(), streamCh, map[string]tool.Tool{"task": &tool.TaskTool{}}, ".")
+
+	if result != model.ProcessResultContinue {
+		t.Fatalf("expected continue, got %q", result)
+	}
+	if !runTaskCalled {
+		t.Fatal("expected RunTask callback to be invoked")
+	}
+	if len(toolMsgs) != 1 {
+		t.Fatalf("expected 1 tool message, got %d", len(toolMsgs))
+	}
+	content, _ := toolMsgs[0].Content.(string)
+	if !strings.Contains(content, "task_id: task-sess-1") {
+		t.Fatalf("expected task_id in tool message content, got: %s", content)
 	}
 }
 

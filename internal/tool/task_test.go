@@ -35,6 +35,9 @@ func TestTaskToolExecute(t *testing.T) {
 	if !strings.Contains(res.Output, "task_id: sess-123") {
 		t.Fatalf("missing task_id output, got: %s", res.Output)
 	}
+	if got, _ := res.Metadata["subagent"].(string); got != "explore" {
+		t.Fatalf("metadata subagent=%q want explore", got)
+	}
 }
 
 func TestTaskToolExecuteMissingRunner(t *testing.T) {

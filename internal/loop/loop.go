@@ -201,6 +201,7 @@ func (r *Runner) Run(ctx context.Context, sessionID string, userText string, age
 			return permission.AuthorizeTool(agentName, toolName, args, ag.Permissions)
 		}
 		proc.RunTask = func(runCtx context.Context, req tool.TaskRequest) (tool.TaskResult, error) {
+			start := time.Now()
 			sub, ok := r.Agents.Lookup(req.Subagent)
 			if !ok {
 				return tool.TaskResult{}, fmt.Errorf("unknown agent type: %s", req.Subagent)
@@ -219,6 +220,9 @@ func (r *Runner) Run(ctx context.Context, sessionID string, userText string, age
 				if err != nil {
 					return tool.TaskResult{}, fmt.Errorf("task_id not found: %s", targetSessionID)
 				}
+				if err := validateTaskTargetSession(sessionID, sess.Directory, subSession); err != nil {
+					return tool.TaskResult{}, err
+				}
 				subSession.DeniedTools["task"] = true
 			}
 
@@ -228,8 +232,10 @@ func (r *Runner) Run(ctx context.Context, sessionID string, userText string, age
 
 			msgs := store.Messages(targetSessionID)
 			return tool.TaskResult{
-				TaskID: targetSessionID,
-				Output: finalAssistantText(msgs),
+				TaskID:     targetSessionID,
+				Output:     finalAssistantText(msgs),
+				Subagent:   req.Subagent,
+				DurationMs: time.Since(start).Milliseconds(),
 			}, nil
 		}
 		result, toolMsgs := proc.Process(ctx, streamCh, effectiveTools, sess.Directory)
@@ -441,4 +447,17 @@ func finalAssistantText(msgs []*model.Message) string {
 		}
 	}
 	return ""
+}
+
+func validateTaskTargetSession(currentSessionID, currentDir string, target *model.Session) error {
+	if target == nil {
+		return fmt.Errorf("task_id session is nil")
+	}
+	if target.ID == currentSessionID {
+		return fmt.Errorf("task_id must not be the current session")
+	}
+	if strings.TrimSpace(target.Directory) != strings.TrimSpace(currentDir) {
+		return fmt.Errorf("task_id %s belongs to a different working directory", target.ID)
+	}
+	return nil
 }
