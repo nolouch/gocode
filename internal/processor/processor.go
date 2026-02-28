@@ -22,13 +22,13 @@ const doomLoopThreshold = 3
 
 // Processor handles one assistant message turn.
 type Processor struct {
-	store   *session.Store
+	store   session.StoreAPI
 	Bus     *bus.Bus
 	Message *model.Message
 }
 
 // New creates a Processor for the given (pre-saved) assistant message.
-func New(store *session.Store, b *bus.Bus, msg *model.Message) *Processor {
+func New(store session.StoreAPI, b *bus.Bus, msg *model.Message) *Processor {
 	return &Processor{store: store, Bus: b, Message: msg}
 }
 
@@ -197,12 +197,15 @@ func (p *Processor) Process(
 			// Execute tool
 			t, exists := tools[event.ToolCallName]
 			var result tool.Result
-			if !exists {
+			if denied, reason := denyToolByPolicy(p.Message.Agent, event.ToolCallName, args); denied {
+				result = tool.Result{IsError: true, Output: reason}
+			} else if !exists {
 				result = tool.Result{IsError: true, Output: fmt.Sprintf("unknown tool: %s", event.ToolCallName)}
 			} else {
 				tctx := tool.Context{
 					SessionID: sid, MessageID: mid,
-					CallID: event.ToolCallID, WorkDir: workDir, Ctx: ctx,
+					CallID: event.ToolCallID, Agent: p.Message.Agent,
+					WorkDir: workDir, Ctx: ctx,
 				}
 				result, _ = t.Execute(tctx, args)
 			}
@@ -282,6 +285,70 @@ func (p *Processor) Process(
 		return model.ProcessResultContinue, toolMessages
 	}
 	return model.ProcessResultStop, nil
+}
+
+func denyToolByPolicy(agentName, toolName string, args map[string]any) (bool, string) {
+	agent := strings.ToLower(strings.TrimSpace(agentName))
+	name := strings.ToLower(strings.TrimSpace(toolName))
+
+	if agent == "plan" {
+		switch name {
+		case "write", "write_file", "edit", "apply_patch", "todo_write", "bash":
+			return true, fmt.Sprintf("tool %q is disabled in plan mode", toolName)
+		}
+	}
+
+	if name == "bash" {
+		cmd, _ := args["command"].(string)
+		if cmd == "" {
+			return false, ""
+		}
+		if agent == "plan" || agent == "explore" {
+			if isMutatingShellCommand(cmd) {
+				return true, fmt.Sprintf("bash command rejected in %s mode: mutating command", agent)
+			}
+		}
+		if isDangerousShellCommand(cmd) {
+			return true, "bash command rejected: dangerous operation"
+		}
+	}
+
+	return false, ""
+}
+
+func isMutatingShellCommand(cmd string) bool {
+	s := strings.ToLower(cmd)
+	mutatingHints := []string{
+		" rm ", " mv ", " cp ", " chmod ", " chown ", " mkdir ", " rmdir ",
+		" touch ", " tee ", " sed -i", " perl -i", " git add", " git commit",
+		" git push", " npm install", " pnpm install", " yarn add", " gofmt",
+		">", " >>",
+	}
+	padded := " " + s + " "
+	for _, hint := range mutatingHints {
+		if strings.Contains(padded, hint) {
+			return true
+		}
+	}
+	return false
+}
+
+func isDangerousShellCommand(cmd string) bool {
+	s := strings.ToLower(cmd)
+	dangerous := []string{
+		"rm -rf /",
+		"mkfs",
+		"shutdown",
+		"reboot",
+		"poweroff",
+		":(){ :|:& };:",
+	}
+	for _, pattern := range dangerous {
+		if strings.Contains(s, pattern) {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *Processor) doomLoop(toolName, argsRaw string) bool {

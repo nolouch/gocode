@@ -30,7 +30,7 @@ func TestProcess_UsesArgsFromToolCallDoneEvent(t *testing.T) {
 	close(streamCh)
 
 	mt := &mockTool{}
-	proc := New(store, msg)
+	proc := New(store, nil, msg)
 
 	result, toolMsgs := proc.Process(context.Background(), streamCh, map[string]tool.Tool{"echo": mt}, ".")
 

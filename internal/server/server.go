@@ -14,8 +14,9 @@ import (
 
 	"github.com/nolouch/gcode/internal/bus"
 	"github.com/nolouch/gcode/internal/loop"
-	"github.com/nolouch/gcode/internal/session"
 	"github.com/nolouch/gcode/internal/server/routes"
+	"github.com/nolouch/gcode/internal/session"
+	"github.com/nolouch/gcode/internal/tool"
 )
 
 // Config holds server startup options.
@@ -34,11 +35,11 @@ type Server struct {
 }
 
 // New creates a Server wiring up all routes.
-func New(cfg Config, store *session.Store, runner *loop.Runner, b *bus.Bus) *Server {
+func New(cfg Config, store session.StoreAPI, runner *loop.Runner, b *bus.Bus, tools map[string]tool.Tool) *Server {
 	mux := http.NewServeMux()
 
 	// Health
-	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /v1/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	})
@@ -47,6 +48,7 @@ func New(cfg Config, store *session.Store, runner *loop.Runner, b *bus.Bus) *Ser
 	routes.RegisterSession(mux, store, runner)
 	routes.RegisterEvents(mux, b)
 	routes.RegisterConfig(mux)
+	routes.RegisterTools(mux, tools)
 
 	return &Server{cfg: cfg, handler: mux}
 }

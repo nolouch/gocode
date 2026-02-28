@@ -52,8 +52,26 @@ func NewRegistry() *Registry {
 		Mode:        ModeSubagent,
 		Prompt:      "You are a fast, read-only codebase explorer. Do not write or modify files.",
 		DeniedTools: map[string]bool{
-			"write_file": true,
-			"bash":       true,
+			"write":       true,
+			"write_file":  true,
+			"edit":        true,
+			"apply_patch": true,
+			"bash":        true,
+		},
+	})
+
+	// "plan" – strict planning mode, no mutating tools.
+	r.Register(&Info{
+		Name:        "plan",
+		Description: "Read-only planning agent. Analyze and propose changes without modifying files.",
+		Mode:        ModePrimary,
+		Prompt:      "You are in plan mode. You must not modify files or run mutating shell commands.",
+		DeniedTools: map[string]bool{
+			"write":       true,
+			"write_file":  true,
+			"edit":        true,
+			"apply_patch": true,
+			"bash":        true,
 		},
 	})
 

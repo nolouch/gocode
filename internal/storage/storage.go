@@ -223,3 +223,14 @@ func (ps *PersistentStore) TouchSession(id string) {
 		ps.db.SaveSession(s)
 	}
 }
+
+// UpsertPart updates a message part and persists the full message snapshot.
+func (ps *PersistentStore) UpsertPart(sessionID string, msgID string, part model.Part) {
+	ps.Store.UpsertPart(sessionID, msgID, part)
+	for _, msg := range ps.Store.Messages(sessionID) {
+		if msg.ID == msgID {
+			ps.db.SaveMessage(msg)
+			return
+		}
+	}
+}

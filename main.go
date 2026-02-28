@@ -14,6 +14,7 @@ import (
 	"github.com/nolouch/gcode/internal/loop"
 	"github.com/nolouch/gcode/internal/mcp"
 	"github.com/nolouch/gcode/internal/server"
+	"github.com/nolouch/gcode/internal/session"
 	"github.com/nolouch/gcode/internal/skill"
 	"github.com/nolouch/gcode/internal/storage"
 	"github.com/nolouch/gcode/internal/tool"
@@ -40,7 +41,7 @@ func rootCmd() *cobra.Command {
 
 type runtime struct {
 	cfg       *config.Config
-	store     *storage.PersistentStore
+	store     session.StoreAPI
 	runner    *loop.Runner
 	evBus     *bus.Bus
 	mcpMgr    *mcp.Manager
@@ -100,7 +101,7 @@ func buildRuntime(ctx context.Context, workDir, agentName string) (*runtime, err
 
 	evBus := bus.New()
 	runner := &loop.Runner{
-		Store:             store.Store,
+		Store:             store,
 		LLM:               lc,
 		Agents:            agents,
 		Tools:             toolReg.All(),
@@ -122,6 +123,7 @@ func tuiCmd() *cobra.Command {
 		workDir   string
 		agentName string
 		addr      string
+		sock      string
 	)
 	wd, _ := os.Getwd()
 	cmd := &cobra.Command{
@@ -138,20 +140,18 @@ func tuiCmd() *cobra.Command {
 			defer rt.mcpMgr.Close()
 			defer rt.db.Close()
 
-			// Attach terminal fallback printer (until full TUI is implemented)
-			bus.SubscribeTerminal(rt.evBus)
-
 			// Start server in background
-			srv := server.New(server.Config{Addr: addr}, rt.store.Store, rt.runner, rt.evBus)
+			srv := server.New(server.Config{Addr: addr, SocketPath: sock}, rt.store, rt.runner, rt.evBus, rt.runner.Tools)
 			go srv.Listen(ctx)
 
 			// Launch TUI
-			return tui.Run(ctx, rt.cfg.Provider.Model, rt.agentName, workDir, rt.store.Store, rt.runner, rt.evBus)
+			return tui.Run(ctx, rt.cfg.Provider.Model, rt.agentName, workDir, addr, sock)
 		},
 	}
 	cmd.Flags().StringVarP(&workDir, "dir", "d", wd, "Working directory")
 	cmd.Flags().StringVarP(&agentName, "agent", "a", "build", "Agent to use")
 	cmd.Flags().StringVar(&addr, "addr", "", "TCP address to expose server (e.g. :4096); empty = Unix socket only")
+	cmd.Flags().StringVar(&sock, "socket", "", "Unix socket path (default ~/.gcode/run/gcode.sock)")
 	return cmd
 }
 
@@ -178,7 +178,7 @@ func serveCmd() *cobra.Command {
 			defer rt.mcpMgr.Close()
 			defer rt.db.Close()
 
-			srv := server.New(server.Config{Addr: addr, SocketPath: sock}, rt.store.Store, rt.runner, rt.evBus)
+			srv := server.New(server.Config{Addr: addr, SocketPath: sock}, rt.store, rt.runner, rt.evBus, rt.runner.Tools)
 			return srv.Listen(ctx)
 		},
 	}

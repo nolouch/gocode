@@ -2,36 +2,93 @@ package tui
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/nolouch/gcode/internal/bus"
-	"github.com/nolouch/gcode/internal/loop"
-	"github.com/nolouch/gcode/internal/session"
+	"github.com/nolouch/gcode/internal/sdk"
 )
 
 // Run starts the Bubble Tea TUI, wiring the event bus to the model.
 func Run(
 	ctx context.Context,
 	modelName, agentName, workDir string,
-	store *session.Store,
-	runner *loop.Runner,
-	evBus *bus.Bus,
+	serverAddr string,
+	socketPath string,
 ) error {
-	// Create session
-	sess := store.CreateSession(workDir)
+	if socketPath == "" {
+		home, _ := os.UserHomeDir()
+		socketPath = filepath.Join(home, ".gcode", "run", "gcode.sock")
+	}
+	cfg := sdk.Config{SocketPath: socketPath}
+	if serverAddr != "" {
+		cfg = sdk.Config{BaseURL: "http://" + serverAddr}
+	}
+	client := sdk.New(cfg)
 
-	// Channel to pipe bus events into Bubble Tea
-	eventCh := make(chan bus.Event, 128)
-	unsub := evBus.Subscribe(func(e bus.Event) {
-		select {
-		case eventCh <- e:
-		default:
+	var sessIDErr error
+	var sessID string
+	for attempt := 0; attempt < 10; attempt++ {
+		created, err := client.CreateSession(ctx, workDir)
+		if err == nil {
+			sessID = created.ID
+			sessIDErr = nil
+			break
 		}
-	})
-	defer unsub()
+		sessIDErr = err
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	if sessIDErr != nil {
+		return fmt.Errorf("create session: %w", sessIDErr)
+	}
 
-	m, err := New(modelName, agentName, workDir, sess.ID, eventCh)
+	stream, errs, err := client.SubscribeEvents(ctx, sessID)
+	if err != nil {
+		return fmt.Errorf("subscribe events: %w", err)
+	}
+
+	// Channel to pipe sdk events into Bubble Tea.
+	eventCh := make(chan bus.Event, 128)
+	go func() {
+		defer close(eventCh)
+		for {
+			select {
+			case e, ok := <-stream:
+				if !ok {
+					return
+				}
+				select {
+				case eventCh <- e:
+				default:
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	go func() {
+		for {
+			select {
+			case err, ok := <-errs:
+				if ok && err != nil {
+					return
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	m, err := New(modelName, agentName, workDir, sessID, eventCh)
 	if err != nil {
 		return err
 	}
@@ -57,7 +114,7 @@ func Run(
 				if text == "" {
 					continue
 				}
-				err := runner.Run(ctx, sess.ID, text, agentName)
+				err := client.SendMessage(ctx, sessID, text, agentName)
 				p.Send(RunDoneMsg{Err: err})
 			case <-ctx.Done():
 				return

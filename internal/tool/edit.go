@@ -13,7 +13,7 @@ type EditTool struct{}
 
 func (t *EditTool) ID() string { return "edit" }
 func (t *EditTool) Description() string {
-	return "Edit a file by replacing an exact string. Fails if old_string is not found or is not unique. Prefer this over write_file for modifying existing files."
+	return "Edit a file by replacing an exact string. Fails if old_string is not found or is not unique. Prefer this over write for modifying existing files."
 }
 func (t *EditTool) Schema() map[string]any {
 	return map[string]any{

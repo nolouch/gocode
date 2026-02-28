@@ -50,13 +50,24 @@ type Registry struct {
 // NewRegistry creates a new Registry pre-populated with built-in tools.
 func NewRegistry() *Registry {
 	r := &Registry{tools: make(map[string]Tool)}
-	r.Register(&ReadFileTool{})
-	r.Register(&WriteFileTool{})
+	read := &ReadFileTool{}
+	write := &WriteFileTool{}
+	list := &ListDirTool{}
+
+	r.Register(read)
+	r.Register(write)
 	r.Register(&EditTool{})
-	r.Register(&ListDirTool{})
+	r.Register(list)
 	r.Register(&GrepTool{})
 	r.Register(&GlobTool{})
 	r.Register(&BashTool{})
+	r.Register(&ApplyPatchTool{})
+
+	// Backward-compatible aliases for older prompts.
+	r.Register(aliasTool{id: "read_file", target: read})
+	r.Register(aliasTool{id: "write_file", target: write})
+	r.Register(aliasTool{id: "list_dir", target: list})
+
 	r.Register(&TodoReadTool{})
 	r.Register(&TodoWriteTool{})
 	r.Register(&WebFetchTool{})
@@ -87,10 +98,22 @@ func (r *Registry) All() map[string]Tool {
 // Built-in tools
 // ─────────────────────────────────────────────
 
+type aliasTool struct {
+	id     string
+	target Tool
+}
+
+func (a aliasTool) ID() string             { return a.id }
+func (a aliasTool) Description() string    { return a.target.Description() }
+func (a aliasTool) Schema() map[string]any { return a.target.Schema() }
+func (a aliasTool) Execute(ctx Context, args map[string]any) (Result, error) {
+	return a.target.Execute(ctx, args)
+}
+
 // ReadFileTool reads a file from the filesystem.
 type ReadFileTool struct{}
 
-func (t *ReadFileTool) ID() string          { return "read_file" }
+func (t *ReadFileTool) ID() string          { return "read" }
 func (t *ReadFileTool) Description() string { return "Read the contents of a file." }
 func (t *ReadFileTool) Schema() map[string]any {
 	return map[string]any{
@@ -106,7 +129,7 @@ func (t *ReadFileTool) Schema() map[string]any {
 func (t *ReadFileTool) Execute(ctx Context, args map[string]any) (Result, error) {
 	p, _ := args["path"].(string)
 	if p == "" {
-		return Result{IsError: true, Output: "read_file requires a 'path' parameter. Example: {\"path\": \"main.go\"}"}, nil
+		return Result{IsError: true, Output: "read requires a 'path' parameter. Example: {\"path\": \"main.go\"}"}, nil
 	}
 	if !filepath.IsAbs(p) {
 		p = filepath.Join(ctx.WorkDir, p)
@@ -121,7 +144,7 @@ func (t *ReadFileTool) Execute(ctx Context, args map[string]any) (Result, error)
 // WriteFileTool writes content to a file, creating directories as needed.
 type WriteFileTool struct{}
 
-func (t *WriteFileTool) ID() string          { return "write_file" }
+func (t *WriteFileTool) ID() string          { return "write" }
 func (t *WriteFileTool) Description() string { return "Write content to a file (overwrite)." }
 func (t *WriteFileTool) Schema() map[string]any {
 	return map[string]any{
@@ -136,7 +159,7 @@ func (t *WriteFileTool) Execute(ctx Context, args map[string]any) (Result, error
 	p, _ := args["path"].(string)
 	content, _ := args["content"].(string)
 	if p == "" || content == "" {
-		return Result{IsError: true, Output: "write_file requires 'path' and 'content' parameters. Example: {\"path\": \"file.txt\", \"content\": \"hello\"}"}, nil
+		return Result{IsError: true, Output: "write requires 'path' and 'content' parameters. Example: {\"path\": \"file.txt\", \"content\": \"hello\"}"}, nil
 	}
 	if !filepath.IsAbs(p) {
 		p = filepath.Join(ctx.WorkDir, p)
@@ -153,7 +176,7 @@ func (t *WriteFileTool) Execute(ctx Context, args map[string]any) (Result, error
 // ListDirTool lists directory contents.
 type ListDirTool struct{}
 
-func (t *ListDirTool) ID() string          { return "list_dir" }
+func (t *ListDirTool) ID() string          { return "list" }
 func (t *ListDirTool) Description() string { return "List files and directories in a path." }
 func (t *ListDirTool) Schema() map[string]any {
 	return map[string]any{

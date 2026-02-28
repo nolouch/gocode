@@ -28,7 +28,7 @@ const maxRetries = 3
 
 // Runner is the top-level agent loop runner.
 type Runner struct {
-	Store             *session.Store
+	Store             session.StoreAPI
 	LLM               *llm.Client
 	Agents            *agent.Registry
 	Tools             map[string]tool.Tool // built-ins + MCP
@@ -226,8 +226,8 @@ Think step-by-step. Be concise.
 IMPORTANT - Tool Calling Format:
 When you call a tool, you MUST provide ALL required arguments in JSON format.
 Example:
-{"name": "read_file", "parameters": {"path": "main.go"}}
-{"name": "list_dir", "parameters": {"path": "."}}
+{"name": "read", "parameters": {"path": "main.go"}}
+{"name": "list", "parameters": {"path": "."}}
 {"name": "bash", "parameters": {"command": "ls -la"}}
 
 NEVER call a tool without arguments. Always include the required parameters.`, workDir)
