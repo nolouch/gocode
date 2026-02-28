@@ -1,15 +1,17 @@
 package routes
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 
 	"github.com/nolouch/gcode/internal/loop"
+	"github.com/nolouch/gcode/internal/server/runs"
 	"github.com/nolouch/gcode/internal/session"
 )
 
 // RegisterSession mounts session and message routes onto mux.
-func RegisterSession(mux *http.ServeMux, store session.StoreAPI, runner *loop.Runner) {
+func RegisterSession(mux *http.ServeMux, store session.StoreAPI, runner *loop.Runner, runMgr *runs.Manager) {
 	// POST /v1/sessions — create a new session
 	mux.HandleFunc("POST /v1/sessions", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
@@ -46,9 +48,13 @@ func RegisterSession(mux *http.ServeMux, store session.StoreAPI, runner *loop.Ru
 	})
 
 	// POST /v1/sessions/{id}/messages — send a user message.
-	// Streaming updates are available via GET /v1/events.
+	// Streaming updates are available via GET /v1/events and run status APIs.
 	mux.HandleFunc("POST /v1/sessions/{id}/messages", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
+		if runner == nil || runMgr == nil {
+			http.Error(w, "runner not configured", http.StatusInternalServerError)
+			return
+		}
 
 		var req struct {
 			Text      string `json:"text"`
@@ -68,11 +74,10 @@ func RegisterSession(mux *http.ServeMux, store session.StoreAPI, runner *loop.Ru
 			return
 		}
 
-		if err := runner.Run(r.Context(), id, req.Text, req.AgentName); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		jsonOK(w, map[string]string{"status": "ok"})
+		run := runMgr.Start(context.Background(), id, req.Text, req.AgentName, func(ctx context.Context) error {
+			return runner.Run(ctx, id, req.Text, req.AgentName)
+		})
+		jsonOK(w, run)
 	})
 }
 

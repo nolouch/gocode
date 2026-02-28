@@ -15,6 +15,7 @@ import (
 	"github.com/nolouch/gcode/internal/bus"
 	"github.com/nolouch/gcode/internal/loop"
 	"github.com/nolouch/gcode/internal/server/routes"
+	"github.com/nolouch/gcode/internal/server/runs"
 	"github.com/nolouch/gcode/internal/session"
 	"github.com/nolouch/gcode/internal/tool"
 )
@@ -37,6 +38,7 @@ type Server struct {
 // New creates a Server wiring up all routes.
 func New(cfg Config, store session.StoreAPI, runner *loop.Runner, b *bus.Bus, tools map[string]tool.Tool) *Server {
 	mux := http.NewServeMux()
+	runMgr := runs.NewManager()
 
 	// Health
 	mux.HandleFunc("GET /v1/health", func(w http.ResponseWriter, r *http.Request) {
@@ -45,7 +47,8 @@ func New(cfg Config, store session.StoreAPI, runner *loop.Runner, b *bus.Bus, to
 	})
 
 	// Routes
-	routes.RegisterSession(mux, store, runner)
+	routes.RegisterSession(mux, store, runner, runMgr)
+	routes.RegisterRuns(mux, runMgr)
 	routes.RegisterEvents(mux, b)
 	routes.RegisterConfig(mux)
 	routes.RegisterTools(mux, tools)

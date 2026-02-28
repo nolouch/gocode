@@ -2,11 +2,14 @@ package routes
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
+	"github.com/nolouch/gcode/internal/server/runs"
 	"github.com/nolouch/gcode/internal/session"
 	"github.com/nolouch/gcode/internal/tool"
 )
@@ -14,7 +17,7 @@ import (
 func TestSessionRoutesV1_CreateAndList(t *testing.T) {
 	mux := http.NewServeMux()
 	store := session.NewStore()
-	RegisterSession(mux, store, nil)
+	RegisterSession(mux, store, nil, runs.NewManager())
 
 	body := bytes.NewBufferString(`{"work_dir":"/tmp/project"}`)
 	req := httptest.NewRequest(http.MethodPost, "/v1/sessions", body)
@@ -36,6 +39,41 @@ func TestSessionRoutesV1_CreateAndList(t *testing.T) {
 	}
 	if len(sessions) != 1 {
 		t.Fatalf("expected 1 session, got %d", len(sessions))
+	}
+}
+
+func TestRunRoutesV1_GetAndAbort(t *testing.T) {
+	mux := http.NewServeMux()
+	rm := runs.NewManager()
+	RegisterRuns(mux, rm)
+
+	r := rm.Start(context.Background(), "sess-1", "hello", "build", func(ctx context.Context) error {
+		<-ctx.Done()
+		return ctx.Err()
+	})
+
+	getReq := httptest.NewRequest(http.MethodGet, "/v1/runs/"+r.ID, nil)
+	getRec := httptest.NewRecorder()
+	mux.ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("get run status=%d body=%s", getRec.Code, getRec.Body.String())
+	}
+
+	abortReq := httptest.NewRequest(http.MethodPost, "/v1/runs/"+r.ID+"/abort", nil)
+	abortRec := httptest.NewRecorder()
+	mux.ServeHTTP(abortRec, abortReq)
+	if abortRec.Code != http.StatusOK {
+		t.Fatalf("abort run status=%d body=%s", abortRec.Code, abortRec.Body.String())
+	}
+
+	// Allow goroutine to observe cancellation and settle status.
+	time.Sleep(10 * time.Millisecond)
+	curr, ok := rm.Get(r.ID)
+	if !ok {
+		t.Fatalf("run not found")
+	}
+	if curr.Status != runs.StatusAborted {
+		t.Fatalf("expected aborted, got %s", curr.Status)
 	}
 }
 

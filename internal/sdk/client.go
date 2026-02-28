@@ -23,6 +23,15 @@ type Client struct {
 	http    *http.Client
 }
 
+type Run struct {
+	ID        string `json:"id"`
+	SessionID string `json:"session_id"`
+	Agent     string `json:"agent"`
+	Prompt    string `json:"prompt"`
+	Status    string `json:"status"`
+	Error     string `json:"error,omitempty"`
+}
+
 func New(cfg Config) *Client {
 	baseURL := cfg.BaseURL
 	transport := http.DefaultTransport.(*http.Transport).Clone()
@@ -73,17 +82,59 @@ func (c *Client) CreateSession(ctx context.Context, workDir string) (*model.Sess
 	return &out, nil
 }
 
-func (c *Client) SendMessage(ctx context.Context, sessionID string, text string, agent string) error {
+func (c *Client) CreateRun(ctx context.Context, sessionID string, text string, agent string) (*Run, error) {
 	reqBody, _ := json.Marshal(map[string]string{
 		"text":  text,
 		"agent": agent,
 	})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint("/v1/sessions/"+sessionID+"/messages"), bytes.NewReader(reqBody))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("create run: %s", string(body))
+	}
+	var out Run
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) GetRun(ctx context.Context, runID string) (*Run, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.endpoint("/v1/runs/"+runID), nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("get run: %s", string(body))
+	}
+	var out Run
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) AbortRun(ctx context.Context, runID string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint("/v1/runs/"+runID+"/abort"), nil)
+	if err != nil {
+		return err
+	}
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return err
@@ -91,7 +142,12 @@ func (c *Client) SendMessage(ctx context.Context, sessionID string, text string,
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("send message: %s", string(body))
+		return fmt.Errorf("abort run: %s", string(body))
 	}
 	return nil
+}
+
+func (c *Client) SendMessage(ctx context.Context, sessionID string, text string, agent string) error {
+	_, err := c.CreateRun(ctx, sessionID, text, agent)
+	return err
 }

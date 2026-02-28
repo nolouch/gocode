@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -100,13 +101,45 @@ func Run(
 	// The simplest approach: poll the model's "pending send" via a custom Cmd.
 	// Instead, we use a goroutine that watches for user input signals via a channel.
 	sendCh := make(chan string, 1)
+	abortCh := make(chan struct{}, 1)
+	var runMu sync.Mutex
+	activeRunID := ""
 
 	// Patch: override the model to use sendCh
 	m.sendCh = sendCh
+	m.abortCh = abortCh
 	p = tea.NewProgram(m, tea.WithAltScreen(), tea.WithContext(ctx))
 
 	// Goroutine: run agent when user sends a message
 	go func() {
+		pollRun := func(runID string) error {
+			for {
+				run, err := client.GetRun(ctx, runID)
+				if err != nil {
+					return err
+				}
+				switch run.Status {
+				case "completed":
+					return nil
+				case "failed":
+					if run.Error != "" {
+						return fmt.Errorf("%s", run.Error)
+					}
+					return fmt.Errorf("run failed")
+				case "aborted":
+					return fmt.Errorf("run aborted")
+				}
+
+				select {
+				case <-abortCh:
+					_ = client.AbortRun(ctx, runID)
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(200 * time.Millisecond):
+				}
+			}
+		}
+
 		for {
 			select {
 			case text := <-sendCh:
@@ -114,8 +147,24 @@ func Run(
 				if text == "" {
 					continue
 				}
-				err := client.SendMessage(ctx, sessID, text, agentName)
+				run, err := client.CreateRun(ctx, sessID, text, agentName)
+				if err == nil {
+					runMu.Lock()
+					activeRunID = run.ID
+					runMu.Unlock()
+					err = pollRun(run.ID)
+					runMu.Lock()
+					activeRunID = ""
+					runMu.Unlock()
+				}
 				p.Send(RunDoneMsg{Err: err})
+			case <-abortCh:
+				runMu.Lock()
+				rid := activeRunID
+				runMu.Unlock()
+				if rid != "" {
+					_ = client.AbortRun(ctx, rid)
+				}
 			case <-ctx.Done():
 				return
 			}

@@ -69,6 +69,8 @@ type Model struct {
 	eventCh <-chan bus.Event
 	// channel to send user messages to the runner goroutine
 	sendCh chan<- string
+	// channel to request abort of the active run
+	abortCh chan<- struct{}
 }
 
 // New creates a new TUI Model.
@@ -144,7 +146,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if !m.running {
 				return m, tea.Quit
 			}
-			// TODO: cancel running turn
+			if m.abortCh != nil {
+				select {
+				case m.abortCh <- struct{}{}:
+				default:
+				}
+			}
 		case tea.KeyCtrlS, tea.KeyCtrlD:
 			if !m.running {
 				text := strings.TrimSpace(m.textarea.Value())
