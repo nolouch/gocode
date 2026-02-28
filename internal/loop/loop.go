@@ -213,6 +213,7 @@ func (r *Runner) Run(ctx context.Context, sessionID string, userText string, age
 			targetSessionID := strings.TrimSpace(req.TaskID)
 			if targetSessionID == "" {
 				subSession := store.CreateSession(sess.Directory)
+				store.SetSessionParent(subSession.ID, sessionID)
 				subSession.DeniedTools["task"] = true
 				targetSessionID = subSession.ID
 			} else {
@@ -458,6 +459,9 @@ func validateTaskTargetSession(currentSessionID, currentDir string, target *mode
 	}
 	if strings.TrimSpace(target.Directory) != strings.TrimSpace(currentDir) {
 		return fmt.Errorf("task_id %s belongs to a different working directory", target.ID)
+	}
+	if target.ParentID != "" && target.ParentID != currentSessionID {
+		return fmt.Errorf("task_id %s belongs to a different parent session", target.ID)
 	}
 	return nil
 }

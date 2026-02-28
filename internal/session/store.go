@@ -40,12 +40,43 @@ func (s *Store) CreateSession(dir string) *model.Session {
 		ID:          NewID(),
 		Title:       "New session",
 		Directory:   dir,
+		ParentID:    "",
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
 		DeniedTools: make(map[string]bool),
 	}
 	s.sessions[sess.ID] = sess
 	return sess
+}
+
+// SetSessionParent updates a session parent link.
+func (s *Store) SetSessionParent(id, parentID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if sess, ok := s.sessions[id]; ok {
+		sess.ParentID = parentID
+		sess.UpdatedAt = time.Now()
+	}
+}
+
+// Children returns sessions whose ParentID matches the provided session ID.
+func (s *Store) Children(parentID string) []*model.Session {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []*model.Session
+	for _, sess := range s.sessions {
+		if sess.ParentID == parentID {
+			out = append(out, sess)
+		}
+	}
+	for i := 0; i < len(out)-1; i++ {
+		for j := i + 1; j < len(out); j++ {
+			if out[j].UpdatedAt.After(out[i].UpdatedAt) {
+				out[i], out[j] = out[j], out[i]
+			}
+		}
+	}
+	return out
 }
 
 // RestoreSession loads a pre-existing session and its messages into the store.

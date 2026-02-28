@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -20,6 +21,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 	id         TEXT PRIMARY KEY,
 	title      TEXT NOT NULL DEFAULT 'New session',
 	directory  TEXT NOT NULL DEFAULT '',
+	parent_id  TEXT NOT NULL DEFAULT '',
 	created_at INTEGER NOT NULL,
 	updated_at INTEGER NOT NULL
 );
@@ -59,7 +61,21 @@ func Open(path string) (*DB, error) {
 	if _, err := db.Exec(schema); err != nil {
 		return nil, fmt.Errorf("storage: schema: %w", err)
 	}
+	if err := ensureSessionParentColumn(db); err != nil {
+		return nil, fmt.Errorf("storage: migrate parent_id: %w", err)
+	}
 	return &DB{db: db}, nil
+}
+
+func ensureSessionParentColumn(db *sql.DB) error {
+	_, err := db.Exec(`ALTER TABLE sessions ADD COLUMN parent_id TEXT NOT NULL DEFAULT ''`)
+	if err == nil {
+		return nil
+	}
+	if strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+		return nil
+	}
+	return err
 }
 
 // DefaultPath returns ~/.gcode/sessions.db
@@ -75,17 +91,17 @@ func (d *DB) Close() error { return d.db.Close() }
 
 func (d *DB) SaveSession(s *model.Session) error {
 	_, err := d.db.Exec(`
-		INSERT INTO sessions(id, title, directory, created_at, updated_at)
-		VALUES(?,?,?,?,?)
-		ON CONFLICT(id) DO UPDATE SET title=excluded.title, updated_at=excluded.updated_at`,
-		s.ID, s.Title, s.Directory,
+		INSERT INTO sessions(id, title, directory, parent_id, created_at, updated_at)
+		VALUES(?,?,?,?,?,?)
+		ON CONFLICT(id) DO UPDATE SET title=excluded.title, directory=excluded.directory, parent_id=excluded.parent_id, updated_at=excluded.updated_at`,
+		s.ID, s.Title, s.Directory, s.ParentID,
 		s.CreatedAt.UnixMilli(), s.UpdatedAt.UnixMilli(),
 	)
 	return err
 }
 
 func (d *DB) ListSessions() ([]*model.Session, error) {
-	rows, err := d.db.Query(`SELECT id, title, directory, created_at, updated_at FROM sessions ORDER BY updated_at DESC`)
+	rows, err := d.db.Query(`SELECT id, title, directory, parent_id, created_at, updated_at FROM sessions ORDER BY updated_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -94,7 +110,7 @@ func (d *DB) ListSessions() ([]*model.Session, error) {
 	for rows.Next() {
 		var s model.Session
 		var createdMs, updatedMs int64
-		if err := rows.Scan(&s.ID, &s.Title, &s.Directory, &createdMs, &updatedMs); err != nil {
+		if err := rows.Scan(&s.ID, &s.Title, &s.Directory, &s.ParentID, &createdMs, &updatedMs); err != nil {
 			return nil, err
 		}
 		s.CreatedAt = time.UnixMilli(createdMs)
@@ -108,8 +124,8 @@ func (d *DB) ListSessions() ([]*model.Session, error) {
 func (d *DB) GetSession(id string) (*model.Session, error) {
 	var s model.Session
 	var createdMs, updatedMs int64
-	err := d.db.QueryRow(`SELECT id, title, directory, created_at, updated_at FROM sessions WHERE id=?`, id).
-		Scan(&s.ID, &s.Title, &s.Directory, &createdMs, &updatedMs)
+	err := d.db.QueryRow(`SELECT id, title, directory, parent_id, created_at, updated_at FROM sessions WHERE id=?`, id).
+		Scan(&s.ID, &s.Title, &s.Directory, &s.ParentID, &createdMs, &updatedMs)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("session not found: %s", id)
 	}
@@ -202,6 +218,19 @@ func (ps *PersistentStore) CreateSession(dir string) *model.Session {
 	s := ps.Store.CreateSession(dir)
 	ps.db.SaveSession(s)
 	return s
+}
+
+// SetSessionParent updates parent_id and persists it.
+func (ps *PersistentStore) SetSessionParent(id, parentID string) {
+	ps.Store.SetSessionParent(id, parentID)
+	if s, err := ps.Store.GetSession(id); err == nil {
+		ps.db.SaveSession(s)
+	}
+}
+
+// Children returns child sessions from in-memory state.
+func (ps *PersistentStore) Children(parentID string) []*model.Session {
+	return ps.Store.Children(parentID)
 }
 
 // UpdateMessage persists a message update.

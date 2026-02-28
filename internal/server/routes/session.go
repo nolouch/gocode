@@ -15,13 +15,24 @@ func RegisterSession(mux *http.ServeMux, store session.StoreAPI, runner *loop.Ru
 	// POST /v1/sessions — create a new session
 	mux.HandleFunc("POST /v1/sessions", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			WorkDir string `json:"work_dir"`
+			WorkDir  string `json:"work_dir"`
+			ParentID string `json:"parent_id"`
 		}
 		json.NewDecoder(r.Body).Decode(&req)
 		if req.WorkDir == "" {
 			req.WorkDir = "."
 		}
+		if req.ParentID != "" {
+			if _, err := store.GetSession(req.ParentID); err != nil {
+				http.Error(w, "parent session not found", http.StatusBadRequest)
+				return
+			}
+		}
 		sess := store.CreateSession(req.WorkDir)
+		if req.ParentID != "" {
+			store.SetSessionParent(sess.ID, req.ParentID)
+			sess.ParentID = req.ParentID
+		}
 		jsonOK(w, sess)
 	})
 
@@ -45,6 +56,16 @@ func RegisterSession(mux *http.ServeMux, store session.StoreAPI, runner *loop.Ru
 	mux.HandleFunc("GET /v1/sessions/{id}/messages", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		jsonOK(w, store.Messages(id))
+	})
+
+	// GET /v1/sessions/{id}/children — list child sessions for a parent session
+	mux.HandleFunc("GET /v1/sessions/{id}/children", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if _, err := store.GetSession(id); err != nil {
+			http.Error(w, "session not found", http.StatusNotFound)
+			return
+		}
+		jsonOK(w, store.Children(id))
 	})
 
 	// POST /v1/sessions/{id}/messages — send a user message.

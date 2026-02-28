@@ -43,6 +43,46 @@ func TestSessionRoutesV1_CreateAndList(t *testing.T) {
 	}
 }
 
+func TestSessionRoutesV1_CreateChildAndListChildren(t *testing.T) {
+	mux := http.NewServeMux()
+	store := session.NewStore()
+	RegisterSession(mux, store, nil, runs.NewManager())
+
+	parentReq := httptest.NewRequest(http.MethodPost, "/v1/sessions", bytes.NewBufferString(`{"work_dir":"/tmp/project"}`))
+	parentRec := httptest.NewRecorder()
+	mux.ServeHTTP(parentRec, parentReq)
+	if parentRec.Code != http.StatusOK {
+		t.Fatalf("create parent status=%d body=%s", parentRec.Code, parentRec.Body.String())
+	}
+	var parent map[string]any
+	if err := json.Unmarshal(parentRec.Body.Bytes(), &parent); err != nil {
+		t.Fatalf("decode parent session: %v", err)
+	}
+	parentID, _ := parent["ID"].(string)
+
+	body := bytes.NewBufferString(`{"work_dir":"/tmp/project","parent_id":"` + parentID + `"}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/sessions", body)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("create child status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	childListReq := httptest.NewRequest(http.MethodGet, "/v1/sessions/"+parentID+"/children", nil)
+	childListRec := httptest.NewRecorder()
+	mux.ServeHTTP(childListRec, childListReq)
+	if childListRec.Code != http.StatusOK {
+		t.Fatalf("list children status=%d body=%s", childListRec.Code, childListRec.Body.String())
+	}
+	var children []map[string]any
+	if err := json.Unmarshal(childListRec.Body.Bytes(), &children); err != nil {
+		t.Fatalf("decode children: %v", err)
+	}
+	if len(children) != 1 {
+		t.Fatalf("expected 1 child session, got %d", len(children))
+	}
+}
+
 func TestRunRoutesV1_GetAndAbort(t *testing.T) {
 	mux := http.NewServeMux()
 	rm := runs.NewManager()

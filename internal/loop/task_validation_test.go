@@ -8,7 +8,7 @@ import (
 
 func TestValidateTaskTargetSession(t *testing.T) {
 	t.Run("ok", func(t *testing.T) {
-		err := validateTaskTargetSession("sess-main", "/repo", &model.Session{ID: "sess-sub", Directory: "/repo"})
+		err := validateTaskTargetSession("sess-main", "/repo", &model.Session{ID: "sess-sub", Directory: "/repo", ParentID: "sess-main"})
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
 		}
@@ -25,6 +25,13 @@ func TestValidateTaskTargetSession(t *testing.T) {
 		err := validateTaskTargetSession("sess-main", "/repo", &model.Session{ID: "sess-sub", Directory: "/other"})
 		if err == nil {
 			t.Fatal("expected error for different directory")
+		}
+	})
+
+	t.Run("different parent", func(t *testing.T) {
+		err := validateTaskTargetSession("sess-main", "/repo", &model.Session{ID: "sess-sub", Directory: "/repo", ParentID: "sess-other"})
+		if err == nil {
+			t.Fatal("expected error for different parent")
 		}
 	})
 }

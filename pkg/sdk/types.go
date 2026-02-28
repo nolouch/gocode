@@ -6,6 +6,7 @@ type Session struct {
 	ID          string
 	Title       string
 	Directory   string
+	ParentID    string
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 	DeniedTools map[string]bool

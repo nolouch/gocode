@@ -13,6 +13,7 @@ type Session struct {
 	ID        string
 	Title     string
 	Directory string // working directory (cwd)
+	ParentID  string // optional parent session for subtask sessions
 	CreatedAt time.Time
 	UpdatedAt time.Time
 

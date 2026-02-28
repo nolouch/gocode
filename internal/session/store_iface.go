@@ -6,6 +6,8 @@ import "github.com/nolouch/gcode/internal/model"
 // It is implemented by the in-memory Store and the SQLite-backed PersistentStore.
 type StoreAPI interface {
 	CreateSession(dir string) *model.Session
+	SetSessionParent(id, parentID string)
+	Children(parentID string) []*model.Session
 	ListSessions() []*model.Session
 	GetSession(id string) (*model.Session, error)
 	TouchSession(id string)

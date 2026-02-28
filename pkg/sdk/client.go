@@ -56,8 +56,12 @@ func (c *Client) endpoint(path string) string {
 	return u
 }
 
-func (c *Client) CreateSession(ctx context.Context, workDir string) (*Session, error) {
-	reqBody, _ := json.Marshal(map[string]string{"work_dir": workDir})
+func (c *Client) CreateSession(ctx context.Context, workDir string, parentID ...string) (*Session, error) {
+	body := map[string]string{"work_dir": workDir}
+	if len(parentID) > 0 && parentID[0] != "" {
+		body["parent_id"] = parentID[0]
+	}
+	reqBody, _ := json.Marshal(body)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint("/v1/sessions"), bytes.NewReader(reqBody))
 	if err != nil {
 		return nil, err
@@ -78,6 +82,27 @@ func (c *Client) CreateSession(ctx context.Context, workDir string) (*Session, e
 		return nil, err
 	}
 	return &out, nil
+}
+
+func (c *Client) ListChildSessions(ctx context.Context, parentID string) ([]*Session, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.endpoint("/v1/sessions/"+parentID+"/children"), nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("list child sessions: %s", string(body))
+	}
+	var out []*Session
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *Client) ListSessions(ctx context.Context) ([]*Session, error) {
