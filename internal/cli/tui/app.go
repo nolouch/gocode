@@ -75,10 +75,10 @@ type Model struct {
 	tools       map[string]*toolEntry // callID -> tool
 	toolOrder   []string              // insertion order
 	thinking    bool
-	thinkingBuf strings.Builder
+	thinkingBuf string
 	thinkingMs  float64
 
-	currentAssistant strings.Builder // accumulates streaming text
+	currentAssistant string // accumulates streaming text
 	running          bool
 	showHelp         bool
 	statusNotice     string
@@ -233,7 +233,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.textarea.Reset()
 					m.addUserEntry(text)
 					m.running = true
-					m.currentAssistant.Reset()
+					m.currentAssistant = ""
 					if m.sendCh != nil {
 						m.sendCh <- text
 					}
@@ -267,9 +267,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.running = false
 		if msg.Err != nil {
 			m.addAssistantEntry(fmt.Sprintf("**Error:** %s", msg.Err.Error()))
-		} else if m.currentAssistant.Len() > 0 {
-			m.addAssistantEntry(m.currentAssistant.String())
-			m.currentAssistant.Reset()
+		} else if m.currentAssistant != "" {
+			m.addAssistantEntry(m.currentAssistant)
+			m.currentAssistant = ""
 		}
 		m.refreshViewport()
 
@@ -282,7 +282,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.entries = msg.Entries
 		m.tools = make(map[string]*toolEntry)
 		m.toolOrder = nil
-		m.currentAssistant.Reset()
+		m.currentAssistant = ""
 		m.running = false
 		m.statusNotice = msg.Notice
 		m.refreshViewport()
@@ -302,13 +302,13 @@ func (m *Model) handleBusEvent(e bus.Event) []tea.Cmd {
 	switch e.Type {
 	case bus.EventTextDelta:
 		if p, ok := e.Payload.(bus.TextDeltaPayload); ok {
-			m.currentAssistant.WriteString(p.Delta)
+			m.currentAssistant += p.Delta
 			m.refreshViewport()
 		}
 
 	case bus.EventThinking:
 		if p, ok := e.Payload.(bus.ThinkingPayload); ok && p.Delta != "" {
-			m.thinkingBuf.WriteString(p.Delta)
+			m.thinkingBuf += p.Delta
 		}
 		m.thinking = true
 		m.refreshViewport()
@@ -360,7 +360,7 @@ func (m *Model) addUserEntry(text string) {
 	m.toolOrder = nil
 	m.thinking = false
 	m.thinkingMs = 0
-	m.thinkingBuf.Reset()
+	m.thinkingBuf = ""
 	m.refreshViewport()
 }
 
@@ -392,13 +392,13 @@ func (m *Model) renderMessages() string {
 	}
 
 	// Live streaming assistant text
-	if m.running && m.currentAssistant.Len() > 0 {
-		rendered := m.renderMarkdown(m.currentAssistant.String())
+	if m.running && m.currentAssistant != "" {
+		rendered := m.renderMarkdown(m.currentAssistant)
 		sb.WriteString(rendered)
 	}
 
 	// Thinking indicator and content
-	if m.thinking || m.thinkingBuf.Len() > 0 || m.thinkingMs > 0 {
+	if m.thinking || m.thinkingBuf != "" || m.thinkingMs > 0 {
 		if m.thinking {
 			sb.WriteString(StyleThinkingLabel.Render("💭 Thinking "))
 			sb.WriteString(m.spinner.View())
@@ -406,7 +406,7 @@ func (m *Model) renderMessages() string {
 		} else if m.thinkingMs > 0 {
 			sb.WriteString(StyleThinkingMuted.Render(fmt.Sprintf("💭 Thought for %.0fms\n", m.thinkingMs)))
 		}
-		if t := strings.TrimSpace(m.thinkingBuf.String()); t != "" {
+		if t := strings.TrimSpace(m.thinkingBuf); t != "" {
 			sb.WriteString(StyleThinkingMuted.Render(t))
 			sb.WriteString("\n")
 		}
