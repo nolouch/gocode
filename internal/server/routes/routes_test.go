@@ -83,6 +83,21 @@ func TestSessionRoutesV1_CreateChildAndListChildren(t *testing.T) {
 	}
 }
 
+func TestSessionRoutesV1_CreateChildWithMissingParent(t *testing.T) {
+	mux := http.NewServeMux()
+	store := session.NewStore()
+	RegisterSession(mux, store, nil, runs.NewManager())
+
+	body := bytes.NewBufferString(`{"work_dir":"/tmp/project","parent_id":"missing-parent"}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/sessions", body)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestRunRoutesV1_GetAndAbort(t *testing.T) {
 	mux := http.NewServeMux()
 	rm := runs.NewManager()
