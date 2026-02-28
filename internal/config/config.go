@@ -24,8 +24,26 @@ type Config struct {
 	// Skill paths (additional dirs to scan for SKILL.md files)
 	Skills SkillsConfig `yaml:"skills"`
 
+	// Agent overrides and custom agents (keyed by identifier)
+	Agent map[string]AgentConfig `yaml:"agent"`
+
 	// Default agent name (default: "build")
 	DefaultAgent string `yaml:"default_agent"`
+}
+
+// AgentConfig allows overriding built-in agent definitions and adding custom agents.
+type AgentConfig struct {
+	Disable     bool           `yaml:"disable"`
+	Name        string         `yaml:"name"`
+	Description string         `yaml:"description"`
+	Mode        string         `yaml:"mode"` // primary|subagent|all
+	Prompt      string         `yaml:"prompt"`
+	ProviderID  string         `yaml:"provider_id"`
+	ModelID     string         `yaml:"model_id"`
+	Steps       int            `yaml:"steps"`
+	Temperature float64        `yaml:"temperature"`
+	DeniedTools []string       `yaml:"denied_tools"`
+	Permission  map[string]any `yaml:"permission"`
 }
 
 // ProviderConfig holds LLM API settings.

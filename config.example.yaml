@@ -18,6 +18,29 @@ provider:
 # Default agent: "build" or "explore" or any custom agent name
 default_agent: build
 
+# ─── Agent Overrides ──────────────────────────────────────────────────────────
+# Override built-ins or define custom agents.
+#agent:
+#  plan:
+#    steps: 50
+#    permission:
+#      "*": deny
+#      read: allow
+#      list: allow
+#      glob: allow
+#      grep: allow
+#      bash: allow
+#
+#  reviewer:
+#    description: Read-only code reviewer
+#    mode: subagent
+#    prompt: You review changes and provide feedback only.
+#    permission:
+#      "*": deny
+#      read: allow
+#      glob: allow
+#      grep: allow
+
 # ─── MCP Servers ─────────────────────────────────────────────────────────────
 # Define Model Context Protocol servers to extend the tool set.
 mcp:

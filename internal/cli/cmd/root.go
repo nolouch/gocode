@@ -94,6 +94,27 @@ func buildRuntime(ctx context.Context, workDir, agentName string) (*runtime, err
 		return nil, fmt.Errorf("storage: load: %w", err)
 	}
 	agents := agent.NewRegistry()
+	if len(cfg.Agent) > 0 {
+		overrides := make(map[string]agent.Override, len(cfg.Agent))
+		for key, v := range cfg.Agent {
+			overrides[key] = agent.Override{
+				Disable:     v.Disable,
+				Name:        v.Name,
+				Description: v.Description,
+				Mode:        v.Mode,
+				Prompt:      v.Prompt,
+				ProviderID:  v.ProviderID,
+				ModelID:     v.ModelID,
+				Steps:       v.Steps,
+				Temperature: v.Temperature,
+				DeniedTools: v.DeniedTools,
+				Permission:  v.Permission,
+			}
+		}
+		if err := agents.ApplyOverrides(overrides); err != nil {
+			return nil, fmt.Errorf("agent config: %w", err)
+		}
+	}
 	toolReg := tool.NewRegistry()
 
 	mcpMgr := mcp.NewManager(cfg.MCPServers())

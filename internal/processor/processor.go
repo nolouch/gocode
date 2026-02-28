@@ -14,6 +14,7 @@ import (
 	"github.com/nolouch/gcode/internal/bus"
 	"github.com/nolouch/gcode/internal/llm"
 	"github.com/nolouch/gcode/internal/model"
+	"github.com/nolouch/gcode/internal/permission"
 	"github.com/nolouch/gcode/internal/session"
 	"github.com/nolouch/gcode/internal/tool"
 )
@@ -25,6 +26,8 @@ type Processor struct {
 	store   session.StoreAPI
 	Bus     *bus.Bus
 	Message *model.Message
+	// Authorize optionally overrides tool policy checks.
+	Authorize func(agentName, toolName string, args map[string]any) (bool, string)
 }
 
 // New creates a Processor for the given (pre-saved) assistant message.
@@ -222,7 +225,11 @@ func (p *Processor) Process(
 			// Execute tool
 			t, exists := tools[event.ToolCallName]
 			var result tool.Result
-			if denied, reason := denyToolByPolicy(p.Message.Agent, event.ToolCallName, args); denied {
+			authorize := p.Authorize
+			if authorize == nil {
+				authorize = denyToolByPolicy
+			}
+			if denied, reason := authorize(p.Message.Agent, event.ToolCallName, args); denied {
 				result = tool.Result{IsError: true, Output: reason}
 			} else if !exists {
 				result = tool.Result{IsError: true, Output: fmt.Sprintf("unknown tool: %s", event.ToolCallName)}
@@ -310,67 +317,7 @@ func (p *Processor) Process(
 }
 
 func denyToolByPolicy(agentName, toolName string, args map[string]any) (bool, string) {
-	agent := strings.ToLower(strings.TrimSpace(agentName))
-	name := strings.ToLower(strings.TrimSpace(toolName))
-
-	if agent == "plan" {
-		switch name {
-		case "write", "write_file", "edit", "apply_patch", "todo_write", "bash":
-			return true, fmt.Sprintf("tool %q is disabled in plan mode", toolName)
-		}
-	}
-
-	if name == "bash" {
-		cmd, _ := args["command"].(string)
-		if cmd == "" {
-			return false, ""
-		}
-		if agent == "plan" || agent == "explore" {
-			if isMutatingShellCommand(cmd) {
-				return true, fmt.Sprintf("bash command rejected in %s mode: mutating command", agent)
-			}
-		}
-		if isDangerousShellCommand(cmd) {
-			return true, "bash command rejected: dangerous operation"
-		}
-	}
-
-	return false, ""
-}
-
-func isMutatingShellCommand(cmd string) bool {
-	s := strings.ToLower(cmd)
-	mutatingHints := []string{
-		" rm ", " mv ", " cp ", " chmod ", " chown ", " mkdir ", " rmdir ",
-		" touch ", " tee ", " sed -i", " perl -i", " git add", " git commit",
-		" git push", " npm install", " pnpm install", " yarn add", " gofmt",
-		">", " >>",
-	}
-	padded := " " + s + " "
-	for _, hint := range mutatingHints {
-		if strings.Contains(padded, hint) {
-			return true
-		}
-	}
-	return false
-}
-
-func isDangerousShellCommand(cmd string) bool {
-	s := strings.ToLower(cmd)
-	dangerous := []string{
-		"rm -rf /",
-		"mkfs",
-		"shutdown",
-		"reboot",
-		"poweroff",
-		":(){ :|:& };:",
-	}
-	for _, pattern := range dangerous {
-		if strings.Contains(s, pattern) {
-			return true
-		}
-	}
-	return false
+	return permission.AuthorizeTool(agentName, toolName, args, nil)
 }
 
 func (p *Processor) doomLoop(toolName, argsRaw string) bool {

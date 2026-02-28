@@ -2,6 +2,13 @@
 // mirroring OpenCode's Agent.Info.
 package agent
 
+import (
+	"fmt"
+	"strings"
+
+	"github.com/nolouch/gcode/internal/permission"
+)
+
 // Mode defines where an agent can be used.
 type Mode string
 
@@ -27,6 +34,23 @@ type Info struct {
 	DeniedTools map[string]bool
 	// Temperature override (0 = use provider default)
 	Temperature float64
+	// Permission ruleset (allow/deny/ask) for tool access
+	Permissions permission.Ruleset
+}
+
+// Override applies config-driven changes to a built-in or custom agent.
+type Override struct {
+	Disable     bool
+	Name        string
+	Description string
+	Mode        string
+	Prompt      string
+	ProviderID  string
+	ModelID     string
+	Steps       int
+	Temperature float64
+	DeniedTools []string
+	Permission  map[string]any
 }
 
 // Registry holds all named agents.
@@ -43,6 +67,7 @@ func NewRegistry() *Registry {
 		Name:        "build",
 		Description: "Default coding agent. Reads, writes, and runs code.",
 		Mode:        ModePrimary,
+		Permissions: permission.Ruleset{{Permission: "*", Pattern: "*", Action: permission.ActionAllow}},
 	})
 
 	// "explore" – read-only, fast codebase exploration
@@ -56,7 +81,15 @@ func NewRegistry() *Registry {
 			"write_file":  true,
 			"edit":        true,
 			"apply_patch": true,
-			"bash":        true,
+		},
+		Permissions: permission.Ruleset{
+			{Permission: "*", Pattern: "*", Action: permission.ActionDeny},
+			{Permission: "read", Pattern: "*", Action: permission.ActionAllow},
+			{Permission: "list", Pattern: "*", Action: permission.ActionAllow},
+			{Permission: "glob", Pattern: "*", Action: permission.ActionAllow},
+			{Permission: "grep", Pattern: "*", Action: permission.ActionAllow},
+			{Permission: "web_fetch", Pattern: "*", Action: permission.ActionAllow},
+			{Permission: "bash", Pattern: "*", Action: permission.ActionAllow},
 		},
 	})
 
@@ -71,11 +104,100 @@ func NewRegistry() *Registry {
 			"write_file":  true,
 			"edit":        true,
 			"apply_patch": true,
-			"bash":        true,
+		},
+		Permissions: permission.Ruleset{
+			{Permission: "*", Pattern: "*", Action: permission.ActionDeny},
+			{Permission: "read", Pattern: "*", Action: permission.ActionAllow},
+			{Permission: "list", Pattern: "*", Action: permission.ActionAllow},
+			{Permission: "glob", Pattern: "*", Action: permission.ActionAllow},
+			{Permission: "grep", Pattern: "*", Action: permission.ActionAllow},
+			{Permission: "web_fetch", Pattern: "*", Action: permission.ActionAllow},
+			{Permission: "bash", Pattern: "*", Action: permission.ActionAllow},
 		},
 	})
 
 	return r
+}
+
+// ApplyOverrides mutates registry entries based on config values.
+func (r *Registry) ApplyOverrides(overrides map[string]Override) error {
+	for key, v := range overrides {
+		if v.Disable {
+			delete(r.agents, key)
+			continue
+		}
+
+		a := r.agents[key]
+		if a == nil {
+			a = &Info{
+				Name:        key,
+				Mode:        ModeAll,
+				DeniedTools: map[string]bool{},
+				Permissions: permission.Ruleset{{Permission: "*", Pattern: "*", Action: permission.ActionAllow}},
+			}
+		}
+
+		if v.Name != "" {
+			a.Name = v.Name
+		}
+		if v.Description != "" {
+			a.Description = v.Description
+		}
+		if v.Mode != "" {
+			m, err := parseMode(v.Mode)
+			if err != nil {
+				return err
+			}
+			a.Mode = m
+		}
+		if v.Prompt != "" {
+			a.Prompt = v.Prompt
+		}
+		if v.ProviderID != "" {
+			a.ProviderID = v.ProviderID
+		}
+		if v.ModelID != "" {
+			a.ModelID = v.ModelID
+		}
+		if v.Steps > 0 {
+			a.MaxSteps = v.Steps
+		}
+		if v.Temperature > 0 {
+			a.Temperature = v.Temperature
+		}
+		if len(v.DeniedTools) > 0 {
+			if a.DeniedTools == nil {
+				a.DeniedTools = map[string]bool{}
+			}
+			for _, id := range v.DeniedTools {
+				id = strings.TrimSpace(id)
+				if id == "" {
+					continue
+				}
+				a.DeniedTools[id] = true
+			}
+		}
+		if len(v.Permission) > 0 {
+			rules, err := permission.FromConfig(v.Permission)
+			if err != nil {
+				return err
+			}
+			a.Permissions = rules
+		}
+
+		r.agents[key] = a
+	}
+	return nil
+}
+
+func parseMode(raw string) (Mode, error) {
+	s := strings.TrimSpace(strings.ToLower(raw))
+	switch Mode(s) {
+	case ModePrimary, ModeSubagent, ModeAll:
+		return Mode(s), nil
+	default:
+		return "", fmt.Errorf("invalid agent mode: %s", raw)
+	}
 }
 
 // Register adds or replaces an agent.

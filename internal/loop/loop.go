@@ -20,6 +20,7 @@ import (
 	"github.com/nolouch/gcode/internal/bus"
 	"github.com/nolouch/gcode/internal/llm"
 	"github.com/nolouch/gcode/internal/model"
+	"github.com/nolouch/gcode/internal/permission"
 	"github.com/nolouch/gcode/internal/processor"
 	"github.com/nolouch/gcode/internal/session"
 	"github.com/nolouch/gcode/internal/tool"
@@ -90,6 +91,9 @@ func (r *Runner) Run(ctx context.Context, sessionID string, userText string, age
 	effectiveTools := make(map[string]tool.Tool)
 	for id, t := range r.Tools {
 		if ag.DeniedTools[id] {
+			continue
+		}
+		if !permission.ToolAllowed(id, ag.Permissions) {
 			continue
 		}
 		if sess.DeniedTools[id] {
@@ -184,6 +188,9 @@ func (r *Runner) Run(ctx context.Context, sessionID string, userText string, age
 
 		// ── Process stream ─────────────────────────────────────────
 		proc := processor.New(store, r.Bus, asstMsg)
+		proc.Authorize = func(agentName, toolName string, args map[string]any) (bool, string) {
+			return permission.AuthorizeTool(agentName, toolName, args, ag.Permissions)
+		}
 		result, toolMsgs := proc.Process(ctx, streamCh, effectiveTools, sess.Directory)
 		extraMessages = toolMsgs
 		r.debugf("step=%d process result=%s tool_messages=%d assistant_finish=%q\n", step, result, len(toolMsgs), asstMsg.Finish)
