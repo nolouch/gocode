@@ -9,8 +9,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-
-	"github.com/nolouch/gcode/internal/model"
 )
 
 type Config struct {
@@ -58,7 +56,7 @@ func (c *Client) endpoint(path string) string {
 	return u
 }
 
-func (c *Client) CreateSession(ctx context.Context, workDir string) (*model.Session, error) {
+func (c *Client) CreateSession(ctx context.Context, workDir string) (*Session, error) {
 	reqBody, _ := json.Marshal(map[string]string{"work_dir": workDir})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint("/v1/sessions"), bytes.NewReader(reqBody))
 	if err != nil {
@@ -75,14 +73,14 @@ func (c *Client) CreateSession(ctx context.Context, workDir string) (*model.Sess
 		body, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("create session: %s", string(body))
 	}
-	var out model.Session
+	var out Session
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return nil, err
 	}
 	return &out, nil
 }
 
-func (c *Client) ListSessions(ctx context.Context) ([]*model.Session, error) {
+func (c *Client) ListSessions(ctx context.Context) ([]*Session, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.endpoint("/v1/sessions"), nil)
 	if err != nil {
 		return nil, err
@@ -96,14 +94,14 @@ func (c *Client) ListSessions(ctx context.Context) ([]*model.Session, error) {
 		body, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("list sessions: %s", string(body))
 	}
-	var out []*model.Session
+	var out []*Session
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *Client) GetMessages(ctx context.Context, sessionID string) ([]*model.Message, error) {
+func (c *Client) GetMessages(ctx context.Context, sessionID string) ([]*Message, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.endpoint("/v1/sessions/"+sessionID+"/messages"), nil)
 	if err != nil {
 		return nil, err
@@ -117,7 +115,7 @@ func (c *Client) GetMessages(ctx context.Context, sessionID string) ([]*model.Me
 		body, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("get messages: %s", string(body))
 	}
-	var out []*model.Message
+	var out []*Message
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return nil, err
 	}

@@ -2,8 +2,6 @@ package sdk
 
 import (
 	"testing"
-
-	"github.com/nolouch/gcode/internal/bus"
 )
 
 func TestDecodeWireEventTypedPayload(t *testing.T) {
@@ -12,12 +10,12 @@ func TestDecodeWireEventTypedPayload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decodeWireEvent: %v", err)
 	}
-	if e.Type != bus.EventPartDone {
+	if e.Type != EventPartDone {
 		t.Fatalf("unexpected type: %s", e.Type)
 	}
-	p, ok := e.Payload.(bus.PartDonePayload)
+	p, ok := e.Payload.(PartDonePayload)
 	if !ok {
-		t.Fatalf("payload type = %T, want bus.PartDonePayload", e.Payload)
+		t.Fatalf("payload type = %T, want sdk.PartDonePayload", e.Payload)
 	}
 	if p.PartID != "p1" || string(p.PartType) != "reasoning" || p.DurationMs != 123 {
 		t.Fatalf("unexpected payload: %#v", p)
@@ -30,12 +28,12 @@ func TestDecodeWireEventPartDeltaPayload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decodeWireEvent: %v", err)
 	}
-	if e.Type != bus.EventPartDelta {
+	if e.Type != EventPartDelta {
 		t.Fatalf("unexpected type: %s", e.Type)
 	}
-	p, ok := e.Payload.(bus.PartDeltaPayload)
+	p, ok := e.Payload.(PartDeltaPayload)
 	if !ok {
-		t.Fatalf("payload type = %T, want bus.PartDeltaPayload", e.Payload)
+		t.Fatalf("payload type = %T, want sdk.PartDeltaPayload", e.Payload)
 	}
 	if p.PartID != "p1" || string(p.PartType) != "reasoning" || p.Delta != "thinking" {
 		t.Fatalf("unexpected payload: %#v", p)

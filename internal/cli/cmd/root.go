@@ -165,14 +165,19 @@ func tuiCmd() *cobra.Command {
 		agentName string
 		addr      string
 		sock      string
+		attach    bool
 	)
 	wd, _ := os.Getwd()
 	cmd := &cobra.Command{
 		Use:   "tui",
-		Short: "Start interactive TUI (default)",
+		Short: "Start interactive TUI",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
 			defer cancel()
+
+			if attach {
+				return tui.Run(ctx, "remote", agentName, workDir, addr, sock)
+			}
 
 			rt, err := buildRuntime(ctx, workDir, agentName)
 			if err != nil {
@@ -190,6 +195,7 @@ func tuiCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&agentName, "agent", "a", "build", "Agent to use")
 	cmd.Flags().StringVar(&addr, "addr", "", "TCP address to expose server (e.g. :4096); empty = Unix socket only")
 	cmd.Flags().StringVar(&sock, "socket", "", "Unix socket path (default ~/.gcode/run/gcode.sock)")
+	cmd.Flags().BoolVar(&attach, "attach", false, "Attach to an existing server instead of starting an embedded runtime")
 	return cmd
 }
 

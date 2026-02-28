@@ -8,14 +8,10 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-
-	"github.com/nolouch/gcode/internal/bus"
 )
 
-type Event = bus.Event
-
 type wireEvent struct {
-	Type      bus.EventType   `json:"type"`
+	Type      EventType       `json:"type"`
 	SessionID string          `json:"session_id"`
 	MessageID string          `json:"message_id"`
 	Payload   json.RawMessage `json:"payload"`
@@ -32,26 +28,26 @@ func decodeWireEvent(payload string) (Event, error) {
 	}
 
 	switch w.Type {
-	case bus.EventTurnDone, bus.EventTurnError:
-		var p bus.TurnDonePayload
+	case EventTurnDone, EventTurnError:
+		var p TurnDonePayload
 		if err := json.Unmarshal(w.Payload, &p); err != nil {
 			return Event{}, err
 		}
 		e.Payload = p
-	case bus.EventPartUpsert:
-		var p bus.PartUpsertPayload
+	case EventPartUpsert:
+		var p PartUpsertPayload
 		if err := json.Unmarshal(w.Payload, &p); err != nil {
 			return Event{}, err
 		}
 		e.Payload = p
-	case bus.EventPartDelta:
-		var p bus.PartDeltaPayload
+	case EventPartDelta:
+		var p PartDeltaPayload
 		if err := json.Unmarshal(w.Payload, &p); err != nil {
 			return Event{}, err
 		}
 		e.Payload = p
-	case bus.EventPartDone:
-		var p bus.PartDonePayload
+	case EventPartDone:
+		var p PartDonePayload
 		if err := json.Unmarshal(w.Payload, &p); err != nil {
 			return Event{}, err
 		}

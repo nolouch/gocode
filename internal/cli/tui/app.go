@@ -11,12 +11,11 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/nolouch/gcode/internal/bus"
-	"github.com/nolouch/gcode/internal/model"
+	"github.com/nolouch/gcode/pkg/sdk"
 )
 
-// BusEventMsg wraps a bus.Event for delivery to the Bubble Tea update loop.
-type BusEventMsg struct{ Event bus.Event }
+// BusEventMsg wraps an sdk.Event for delivery to the Bubble Tea update loop.
+type BusEventMsg struct{ Event sdk.Event }
 
 // RunDoneMsg signals the agent turn finished.
 type RunDoneMsg struct{ Err error }
@@ -96,8 +95,8 @@ type Model struct {
 	// glamour renderer
 	renderer *glamour.TermRenderer
 
-	// channel to receive bus events
-	eventCh <-chan bus.Event
+	// channel to receive stream events
+	eventCh <-chan sdk.Event
 	// channel to send user messages to the runner goroutine
 	sendCh chan<- string
 	// channel to request abort of the active run
@@ -107,7 +106,7 @@ type Model struct {
 }
 
 // New creates a new TUI Model.
-func New(modelName, agentName, workDir, sessionID string, eventCh <-chan bus.Event) (Model, error) {
+func New(modelName, agentName, workDir, sessionID string, eventCh <-chan sdk.Event) (Model, error) {
 	ta := textarea.New()
 	ta.Placeholder = "Type a message... (Enter send, Shift+Enter newline, Esc interrupt)"
 	ta.Focus()
@@ -150,7 +149,7 @@ func New(modelName, agentName, workDir, sessionID string, eventCh <-chan bus.Eve
 }
 
 // waitForEvent returns a Cmd that waits for the next bus event.
-func waitForEvent(ch <-chan bus.Event) tea.Cmd {
+func waitForEvent(ch <-chan sdk.Event) tea.Cmd {
 	return func() tea.Msg {
 		e, ok := <-ch
 		if !ok {
@@ -323,36 +322,36 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-func (m *Model) handleBusEvent(e bus.Event) []tea.Cmd {
+func (m *Model) handleBusEvent(e sdk.Event) []tea.Cmd {
 	switch e.Type {
-	case bus.EventPartUpsert:
-		if p, ok := e.Payload.(bus.PartUpsertPayload); ok {
+	case sdk.EventPartUpsert:
+		if p, ok := e.Payload.(sdk.PartUpsertPayload); ok {
 			m.partStreamActive = true
 			switch p.Part.Type {
-			case model.PartTypeReasoning:
+			case sdk.PartTypeReasoning:
 				idx := m.ensureThinkingEntryForPart(p.Part.ID)
 				if p.Part.Text != "" {
 					m.thinkings[idx].content = p.Part.Text
 				}
 				m.activeReasoningPartID = p.Part.ID
 				m.refreshViewport()
-			case model.PartTypeTool:
+			case sdk.PartTypeTool:
 				m.upsertToolFromPart(p.Part)
 				m.refreshViewport()
 			}
 		}
 
-	case bus.EventPartDelta:
-		if p, ok := e.Payload.(bus.PartDeltaPayload); ok {
+	case sdk.EventPartDelta:
+		if p, ok := e.Payload.(sdk.PartDeltaPayload); ok {
 			m.partStreamActive = true
 			if p.Field != "text" {
 				break
 			}
 			switch p.PartType {
-			case model.PartTypeText:
+			case sdk.PartTypeText:
 				m.currentAssistant += p.Delta
 				m.refreshViewport()
-			case model.PartTypeReasoning:
+			case sdk.PartTypeReasoning:
 				idx := m.ensureThinkingEntryForPart(p.PartID)
 				m.thinkings[idx].content += p.Delta
 				m.activeReasoningPartID = p.PartID
@@ -360,17 +359,17 @@ func (m *Model) handleBusEvent(e bus.Event) []tea.Cmd {
 			}
 		}
 
-	case bus.EventPartDone:
-		if p, ok := e.Payload.(bus.PartDonePayload); ok {
+	case sdk.EventPartDone:
+		if p, ok := e.Payload.(sdk.PartDonePayload); ok {
 			m.partStreamActive = true
 			switch p.PartType {
-			case model.PartTypeReasoning:
+			case sdk.PartTypeReasoning:
 				idx := m.ensureThinkingEntryForPart(p.PartID)
 				m.thinkings[idx].durationMs = p.DurationMs
 				m.activeReasoningPartID = ""
 				m.thinkingIdx = -1
 				m.refreshViewport()
-			case model.PartTypeTool:
+			case sdk.PartTypeTool:
 				if callID, ok := m.toolPartCallID[p.PartID]; ok {
 					if te, ok := m.tools[callID]; ok {
 						te.durationMs = int64(p.DurationMs)
@@ -380,7 +379,7 @@ func (m *Model) handleBusEvent(e bus.Event) []tea.Cmd {
 			}
 		}
 
-	case bus.EventTurnDone, bus.EventTurnError:
+	case sdk.EventTurnDone, sdk.EventTurnError:
 		// RunDoneMsg will be sent by the goroutine running runner.Run
 	}
 	return nil
@@ -430,7 +429,7 @@ func (m *Model) addAssistantEntry(text string) int {
 	return len(m.entries) - 1
 }
 
-func (m *Model) upsertToolFromPart(part model.Part) {
+func (m *Model) upsertToolFromPart(part sdk.Part) {
 	if part.Tool == nil {
 		return
 	}
@@ -447,13 +446,13 @@ func (m *Model) upsertToolFromPart(part model.Part) {
 	}
 	te.name = part.Tool.Tool
 	switch part.Tool.State {
-	case model.ToolStateCompleted:
+	case sdk.ToolStateCompleted:
 		te.state = "done"
 		te.output = part.Tool.Output
-	case model.ToolStateError:
+	case sdk.ToolStateError:
 		te.state = "error"
 		te.output = part.Tool.Error
-	case model.ToolStateRunning, model.ToolStatePending:
+	case sdk.ToolStateRunning, sdk.ToolStatePending:
 		te.state = "running"
 	}
 	if !part.Tool.StartAt.IsZero() && !part.Tool.EndAt.IsZero() {
@@ -670,11 +669,20 @@ func isExitKey(msg tea.KeyMsg) bool {
 }
 
 func (m *Model) relayout() {
-	m.textarea.SetWidth(m.width - 2)
+	inputW := m.width - 2
+	if inputW < 1 {
+		inputW = 1
+	}
+	m.textarea.SetWidth(inputW)
+	m.viewport.Width = m.width
 	if m.renderer != nil {
+		wrapW := m.width - 4
+		if wrapW < 1 {
+			wrapW = 1
+		}
 		m.renderer, _ = glamour.NewTermRenderer(
 			glamour.WithStandardStyle("notty"),
-			glamour.WithWordWrap(m.width-4),
+			glamour.WithWordWrap(wrapW),
 		)
 	}
 	m.refreshViewport()

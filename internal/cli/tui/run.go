@@ -11,8 +11,6 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/nolouch/gcode/internal/bus"
-	"github.com/nolouch/gcode/internal/model"
 	"github.com/nolouch/gcode/pkg/sdk"
 )
 
@@ -54,7 +52,7 @@ func Run(
 	}
 
 	// Channel to pipe sdk events into Bubble Tea.
-	eventCh := make(chan bus.Event, 128)
+	eventCh := make(chan sdk.Event, 128)
 
 	var streamMu sync.Mutex
 	var streamCancel context.CancelFunc
@@ -170,19 +168,19 @@ func Run(
 
 	// Goroutine: run agent when user sends a message
 	go func() {
-		buildEntries := func(msgs []*model.Message) []msgEntry {
-			renderToolBlock := func(parts []model.Part) string {
+		buildEntries := func(msgs []*sdk.Message) []msgEntry {
+			renderToolBlock := func(parts []sdk.Part) string {
 				var tb strings.Builder
 				for _, p := range parts {
-					if p.Type != model.PartTypeTool || p.Tool == nil {
+					if p.Type != sdk.PartTypeTool || p.Tool == nil {
 						continue
 					}
 					sym := "●"
 					suffix := ""
 					switch p.Tool.State {
-					case model.ToolStateCompleted:
+					case sdk.ToolStateCompleted:
 						sym = "✓"
-					case model.ToolStateError:
+					case sdk.ToolStateError:
 						sym = "✗"
 					}
 					if !p.Tool.StartAt.IsZero() && !p.Tool.EndAt.IsZero() {
@@ -193,7 +191,7 @@ func Run(
 						suffix = fmt.Sprintf(" (%s)", d)
 					}
 					tb.WriteString(fmt.Sprintf("%s %s%s\n", sym, p.Tool.Tool, suffix))
-					if p.Tool.State == model.ToolStateError && p.Tool.Error != "" {
+					if p.Tool.State == sdk.ToolStateError && p.Tool.Error != "" {
 						out := p.Tool.Error
 						if len(out) > 200 {
 							out = out[:200] + "..."
@@ -207,11 +205,11 @@ func Run(
 			out := make([]msgEntry, 0, len(msgs))
 			for _, m := range msgs {
 				switch m.Role {
-				case model.RoleUser:
+				case sdk.RoleUser:
 					text := strings.TrimSpace(m.Text)
 					if text == "" {
 						for _, p := range m.Parts {
-							if p.Type == model.PartTypeText {
+							if p.Type == sdk.PartTypeText {
 								text = strings.TrimSpace(p.Text)
 								if text != "" {
 									break
@@ -222,13 +220,13 @@ func Run(
 					if text != "" {
 						out = append(out, msgEntry{role: "user", content: text})
 					}
-				case model.RoleAssistant:
+				case sdk.RoleAssistant:
 					var reasoning strings.Builder
 					toolBlock := renderToolBlock(m.Parts)
 					var sb strings.Builder
 					for _, p := range m.Parts {
 						switch p.Type {
-						case model.PartTypeReasoning:
+						case sdk.PartTypeReasoning:
 							if text := strings.TrimSpace(p.Text); text != "" {
 								if reasoning.Len() > 0 {
 									reasoning.WriteString("\n\n")
@@ -236,7 +234,7 @@ func Run(
 								reasoning.WriteString("💭 Thinking\n")
 								reasoning.WriteString(text)
 							}
-						case model.PartTypeText:
+						case sdk.PartTypeText:
 							if p.Text != "" {
 								sb.WriteString(p.Text)
 							}
