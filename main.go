@@ -1,12 +1,10 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 
 	"github.com/nolouch/gcode/internal/agent"
@@ -19,6 +17,7 @@ import (
 	"github.com/nolouch/gcode/internal/session"
 	"github.com/nolouch/gcode/internal/skill"
 	"github.com/nolouch/gcode/internal/tool"
+	"github.com/nolouch/gcode/internal/tui"
 	"github.com/spf13/cobra"
 )
 
@@ -136,33 +135,8 @@ func tuiCmd() *cobra.Command {
 			srv := server.New(server.Config{Addr: addr}, rt.store, rt.runner, rt.evBus)
 			go srv.Listen(ctx)
 
-			// Create initial session
-			sess := rt.store.CreateSession(workDir)
-			fmt.Printf("gcode  model=%s  agent=%s  dir=%s\n\n", rt.cfg.Provider.Model, rt.agentName, workDir)
-			fmt.Println("Type your message (Ctrl-D or 'exit' to quit):")
-
-			scanner := bufio.NewScanner(os.Stdin)
-			for {
-				fmt.Print("\n> ")
-				if !scanner.Scan() {
-					break
-				}
-				input := strings.TrimSpace(scanner.Text())
-				if input == "" {
-					continue
-				}
-				if input == "exit" || input == "quit" {
-					break
-				}
-				if err := rt.runner.Run(ctx, sess.ID, input, rt.agentName); err != nil {
-					if err == context.Canceled {
-						fmt.Println("\n[interrupted]")
-						continue
-					}
-					fmt.Fprintf(os.Stderr, "error: %v\n", err)
-				}
-			}
-			return nil
+			// Launch TUI
+			return tui.Run(ctx, rt.cfg.Provider.Model, rt.agentName, workDir, rt.store, rt.runner, rt.evBus)
 		},
 	}
 	cmd.Flags().StringVarP(&workDir, "dir", "d", wd, "Working directory")
