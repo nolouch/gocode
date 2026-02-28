@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/nolouch/gcode/internal/model"
 )
 
 var (
@@ -21,55 +22,59 @@ var (
 func SubscribeTerminal(b *Bus) {
 	b.Subscribe(func(e Event) {
 		switch e.Type {
-		case EventTextDelta:
-			if p, ok := e.Payload.(TextDeltaPayload); ok {
-				fmt.Print(p.Delta)
-			}
-
-		case EventThinking:
-			if p, ok := e.Payload.(ThinkingPayload); ok {
-				if p.Delta == "" {
-					fmt.Print(styleThinking.Render("💭 Thinking: "))
-				} else {
+		case EventPartDelta:
+			if p, ok := e.Payload.(PartDeltaPayload); ok {
+				switch p.PartType {
+				case model.PartTypeText:
+					fmt.Print(p.Delta)
+				case model.PartTypeReasoning:
 					fmt.Print(p.Delta)
 				}
 			}
 
-		case EventThinkingDone:
-			if p, ok := e.Payload.(ThinkingPayload); ok {
+		case EventPartUpsert:
+			if p, ok := e.Payload.(PartUpsertPayload); ok {
+				if p.Part.Type != model.PartTypeTool || p.Part.Tool == nil {
+					break
+				}
+				tp := p.Part.Tool
+				durMs := int64(0)
+				if !tp.StartAt.IsZero() && !tp.EndAt.IsZero() {
+					durMs = tp.EndAt.Sub(tp.StartAt).Milliseconds()
+					if durMs < 0 {
+						durMs = 0
+					}
+				}
+				switch tp.State {
+				case model.ToolStatePending, model.ToolStateRunning:
+					fmt.Printf("\n%s %s\n",
+						styleRunning.Render("●"),
+						styleToolName.Render("Tool: "+tp.Tool))
+				case model.ToolStateCompleted:
+					fmt.Printf("%s %s (%dms)\n",
+						styleSuccess.Render("✓"),
+						styleToolName.Render("Tool: "+tp.Tool),
+						durMs)
+					out := tp.Output
+					if len(out) > 500 {
+						out = out[:500] + "\n... (truncated)"
+					}
+					if out != "" {
+						fmt.Println(out)
+					}
+				case model.ToolStateError:
+					fmt.Printf("%s %s (%dms)\n",
+						styleError.Render("✗"),
+						styleToolName.Render("Tool: "+tp.Tool),
+						durMs)
+					fmt.Printf("[tool-error] %s\n", tp.Error)
+				}
+			}
+
+		case EventPartDone:
+			if p, ok := e.Payload.(PartDonePayload); ok && p.PartType == model.PartTypeReasoning {
 				fmt.Println()
-				fmt.Println(styleThinkDone.Render(fmt.Sprintf("✓ done (%.0fms)", p.Duration)))
-			}
-
-		case EventToolStart:
-			if p, ok := e.Payload.(ToolPayload); ok {
-				fmt.Printf("\n%s %s\n",
-					styleRunning.Render("●"),
-					styleToolName.Render("Tool: "+p.Tool))
-			}
-
-		case EventToolDone:
-			if p, ok := e.Payload.(ToolPayload); ok {
-				fmt.Printf("%s %s (%dms)\n",
-					styleSuccess.Render("✓"),
-					styleToolName.Render("Tool: "+p.Tool),
-					p.DurationMs)
-				out := p.Output
-				if len(out) > 500 {
-					out = out[:500] + "\n... (truncated)"
-				}
-				if out != "" {
-					fmt.Println(out)
-				}
-			}
-
-		case EventToolError:
-			if p, ok := e.Payload.(ToolPayload); ok {
-				fmt.Printf("%s %s (%dms)\n",
-					styleError.Render("✗"),
-					styleToolName.Render("Tool: "+p.Tool),
-					p.DurationMs)
-				fmt.Printf("[tool-error] %s\n", p.Output)
+				fmt.Println(styleThinkDone.Render(fmt.Sprintf("✓ done (%.0fms)", p.DurationMs)))
 			}
 
 		case EventTurnDone:

@@ -47,19 +47,54 @@ func (p *Processor) Process(
 	workDir string,
 ) (model.ProcessResult, []model.ChatMessage) {
 	var (
-		currentTextPart *model.Part
-		toolParts       = make(map[string]*model.Part)
-		toolArgsAcc     = make(map[string]*strings.Builder)
-		toolMessages    []model.ChatMessage
+		currentTextPart      *model.Part
+		currentReasoningPart *model.Part
+		toolParts            = make(map[string]*model.Part)
+		toolArgsAcc          = make(map[string]*strings.Builder)
+		toolMessages         []model.ChatMessage
 
-		thinkingStart   time.Time
-		thinkingContent strings.Builder
-		toolStartTimes  = make(map[string]time.Time)
+		thinkingStart  time.Time
+		toolStartTimes = make(map[string]time.Time)
 	)
 
 	partID := func() string { return session.NewID() }
 	sid := p.Message.SessionID
 	mid := p.Message.ID
+	publishPartUpsert := func(part model.Part) {
+		p.publish(bus.Event{
+			Type: bus.EventPartUpsert, SessionID: sid, MessageID: mid,
+			Payload: bus.PartUpsertPayload{Part: part},
+		})
+	}
+	publishPartDelta := func(partID string, partType model.PartType, field, delta string) {
+		if delta == "" {
+			return
+		}
+		p.publish(bus.Event{
+			Type: bus.EventPartDelta, SessionID: sid, MessageID: mid,
+			Payload: bus.PartDeltaPayload{PartID: partID, PartType: partType, Field: field, Delta: delta},
+		})
+	}
+	flushThinking := func() {
+		if currentReasoningPart == nil {
+			return
+		}
+		currentReasoningPart.Text = strings.TrimRight(currentReasoningPart.Text, " \t\n\r")
+		p.store.UpsertPart(sid, mid, *currentReasoningPart)
+		publishPartUpsert(*currentReasoningPart)
+
+		durationMs := 0.0
+		if !thinkingStart.IsZero() {
+			durationMs = float64(time.Since(thinkingStart).Milliseconds())
+		}
+		p.publish(bus.Event{
+			Type: bus.EventPartDone, SessionID: sid, MessageID: mid,
+			Payload: bus.PartDonePayload{PartID: currentReasoningPart.ID, PartType: currentReasoningPart.Type, DurationMs: durationMs},
+		})
+
+		currentReasoningPart = nil
+		thinkingStart = time.Time{}
+	}
 
 	for event := range streamCh {
 		select {
@@ -73,24 +108,23 @@ func (p *Processor) Process(
 
 		switch event.Type {
 		case llm.TypeReasoningDelta:
-			if thinkingContent.Len() == 0 {
+			if currentReasoningPart == nil {
 				thinkingStart = time.Now()
+				rp := model.Part{
+					ID: partID(), SessionID: sid, MessageID: mid,
+					Type: model.PartTypeReasoning,
+				}
+				p.Message.Parts = append(p.Message.Parts, rp)
+				currentReasoningPart = &p.Message.Parts[len(p.Message.Parts)-1]
+				p.store.UpdateMessage(p.Message)
+				publishPartUpsert(*currentReasoningPart)
 			}
-			thinkingContent.WriteString(event.ReasoningDelta)
-			p.publish(bus.Event{
-				Type: bus.EventThinking, SessionID: sid, MessageID: mid,
-				Payload: bus.ThinkingPayload{Delta: event.ReasoningDelta},
-			})
+			currentReasoningPart.Text += event.ReasoningDelta
+			p.store.UpsertPart(sid, mid, *currentReasoningPart)
+			publishPartDelta(currentReasoningPart.ID, currentReasoningPart.Type, "text", event.ReasoningDelta)
 
 		case llm.TypeTextDelta:
-			if thinkingContent.Len() > 0 {
-				durationMs := float64(time.Since(thinkingStart).Milliseconds())
-				p.publish(bus.Event{
-					Type: bus.EventThinkingDone, SessionID: sid, MessageID: mid,
-					Payload: bus.ThinkingPayload{Duration: durationMs},
-				})
-				thinkingContent.Reset()
-			}
+			flushThinking()
 			if currentTextPart == nil {
 				pt := model.Part{
 					ID: partID(), SessionID: sid, MessageID: mid,
@@ -99,29 +133,16 @@ func (p *Processor) Process(
 				p.Message.Parts = append(p.Message.Parts, pt)
 				currentTextPart = &p.Message.Parts[len(p.Message.Parts)-1]
 				p.store.UpdateMessage(p.Message)
+				publishPartUpsert(*currentTextPart)
 			}
 			currentTextPart.Text += event.TextDelta
 			p.store.UpsertPart(sid, mid, *currentTextPart)
-			p.publish(bus.Event{
-				Type: bus.EventTextDelta, SessionID: sid, MessageID: mid,
-				Payload: bus.TextDeltaPayload{Delta: event.TextDelta},
-			})
+			publishPartDelta(currentTextPart.ID, currentTextPart.Type, "text", event.TextDelta)
 
 		case llm.TypeToolCallStart:
-			if thinkingContent.Len() > 0 {
-				durationMs := float64(time.Since(thinkingStart).Milliseconds())
-				p.publish(bus.Event{
-					Type: bus.EventThinkingDone, SessionID: sid, MessageID: mid,
-					Payload: bus.ThinkingPayload{Duration: durationMs},
-				})
-				thinkingContent.Reset()
-			}
+			flushThinking()
 			toolArgsAcc[event.ToolCallID] = &strings.Builder{}
 			toolStartTimes[event.ToolCallID] = time.Now()
-			p.publish(bus.Event{
-				Type: bus.EventToolStart, SessionID: sid, MessageID: mid,
-				Payload: bus.ToolPayload{CallID: event.ToolCallID, Tool: event.ToolCallName},
-			})
 			pt := model.Part{
 				ID: partID(), SessionID: sid, MessageID: mid,
 				Type: model.PartTypeTool,
@@ -134,6 +155,7 @@ func (p *Processor) Process(
 			p.Message.Parts = append(p.Message.Parts, pt)
 			toolParts[event.ToolCallID] = &p.Message.Parts[len(p.Message.Parts)-1]
 			p.store.UpdateMessage(p.Message)
+			publishPartUpsert(*toolParts[event.ToolCallID])
 
 		case llm.TypeToolCallDelta:
 			if b, ok := toolArgsAcc[event.ToolCallID]; ok {
@@ -160,9 +182,10 @@ func (p *Processor) Process(
 				tp.Tool.Error = errMsg
 				tp.Tool.EndAt = time.Now()
 				p.store.UpsertPart(sid, mid, *tp)
+				publishPartUpsert(*tp)
 				p.publish(bus.Event{
-					Type: bus.EventToolError, SessionID: sid, MessageID: mid,
-					Payload: bus.ToolPayload{CallID: event.ToolCallID, Tool: event.ToolCallName, Output: errMsg, IsError: true},
+					Type: bus.EventPartDone, SessionID: sid, MessageID: mid,
+					Payload: bus.PartDonePayload{PartID: tp.ID, PartType: tp.Type},
 				})
 				toolMessages = append(toolMessages, model.ChatMessage{
 					Role: "tool", ToolCallID: event.ToolCallID,
@@ -178,6 +201,7 @@ func (p *Processor) Process(
 			tp.Tool.Input = args
 			tp.Tool.StartAt = time.Now()
 			p.store.UpsertPart(sid, mid, *tp)
+			publishPartUpsert(*tp)
 
 			if p.doomLoop(event.ToolCallName, argsRaw) {
 				errMsg := "doom loop detected"
@@ -185,11 +209,12 @@ func (p *Processor) Process(
 				tp.Tool.Error = errMsg
 				tp.Tool.EndAt = time.Now()
 				p.store.UpsertPart(sid, mid, *tp)
+				publishPartUpsert(*tp)
 				p.Message.Finish = "stop"
 				p.store.UpdateMessage(p.Message)
 				p.publish(bus.Event{
-					Type: bus.EventToolError, SessionID: sid, MessageID: mid,
-					Payload: bus.ToolPayload{CallID: event.ToolCallID, Tool: event.ToolCallName, Output: errMsg, IsError: true},
+					Type: bus.EventPartDone, SessionID: sid, MessageID: mid,
+					Payload: bus.PartDonePayload{PartID: tp.ID, PartType: tp.Type},
 				})
 				return model.ProcessResultStop, nil
 			}
@@ -219,25 +244,17 @@ func (p *Processor) Process(
 				tp.Tool.State = model.ToolStateError
 				tp.Tool.Error = result.Output
 				p.store.UpsertPart(sid, mid, *tp)
-				p.publish(bus.Event{
-					Type: bus.EventToolError, SessionID: sid, MessageID: mid,
-					Payload: bus.ToolPayload{
-						CallID: event.ToolCallID, Tool: event.ToolCallName,
-						Input: args, Output: result.Output, IsError: true, DurationMs: durationMs,
-					},
-				})
+				publishPartUpsert(*tp)
 			} else {
 				tp.Tool.State = model.ToolStateCompleted
 				tp.Tool.Output = result.Output
 				p.store.UpsertPart(sid, mid, *tp)
-				p.publish(bus.Event{
-					Type: bus.EventToolDone, SessionID: sid, MessageID: mid,
-					Payload: bus.ToolPayload{
-						CallID: event.ToolCallID, Tool: event.ToolCallName,
-						Input: args, Output: result.Output, DurationMs: durationMs,
-					},
-				})
+				publishPartUpsert(*tp)
 			}
+			p.publish(bus.Event{
+				Type: bus.EventPartDone, SessionID: sid, MessageID: mid,
+				Payload: bus.PartDonePayload{PartID: tp.ID, PartType: tp.Type, DurationMs: float64(durationMs)},
+			})
 
 			toolMessages = append(toolMessages, model.ChatMessage{
 				Role: "tool", ToolCallID: event.ToolCallID,
@@ -245,6 +262,7 @@ func (p *Processor) Process(
 			})
 
 		case llm.TypeStepFinish:
+			flushThinking()
 			if event.FinishReason != "" {
 				p.Message.Finish = event.FinishReason
 			}
@@ -260,12 +278,14 @@ func (p *Processor) Process(
 			}
 			p.Message.Parts = append(p.Message.Parts, sfPart)
 			p.store.UpdateMessage(p.Message)
+			publishPartUpsert(sfPart)
 			p.publish(bus.Event{
 				Type: bus.EventTurnDone, SessionID: sid, MessageID: mid,
 				Payload: bus.TurnDonePayload{FinishReason: event.FinishReason},
 			})
 
 		case llm.TypeError:
+			flushThinking()
 			p.Message.Error = &model.AgentError{
 				Name: "APIError", Message: event.Err.Error(), Retryable: true,
 			}
@@ -277,6 +297,8 @@ func (p *Processor) Process(
 			return model.ProcessResultStop, nil
 		}
 	}
+
+	flushThinking()
 
 	p.Message.Parts = compactTextParts(p.Message.Parts)
 	p.store.UpdateMessage(p.Message)

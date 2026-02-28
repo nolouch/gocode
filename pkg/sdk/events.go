@@ -32,26 +32,26 @@ func decodeWireEvent(payload string) (Event, error) {
 	}
 
 	switch w.Type {
-	case bus.EventTextDelta:
-		var p bus.TextDeltaPayload
-		if err := json.Unmarshal(w.Payload, &p); err != nil {
-			return Event{}, err
-		}
-		e.Payload = p
-	case bus.EventThinking, bus.EventThinkingDone:
-		var p bus.ThinkingPayload
-		if err := json.Unmarshal(w.Payload, &p); err != nil {
-			return Event{}, err
-		}
-		e.Payload = p
-	case bus.EventToolStart, bus.EventToolDone, bus.EventToolError:
-		var p bus.ToolPayload
-		if err := json.Unmarshal(w.Payload, &p); err != nil {
-			return Event{}, err
-		}
-		e.Payload = p
 	case bus.EventTurnDone, bus.EventTurnError:
 		var p bus.TurnDonePayload
+		if err := json.Unmarshal(w.Payload, &p); err != nil {
+			return Event{}, err
+		}
+		e.Payload = p
+	case bus.EventPartUpsert:
+		var p bus.PartUpsertPayload
+		if err := json.Unmarshal(w.Payload, &p); err != nil {
+			return Event{}, err
+		}
+		e.Payload = p
+	case bus.EventPartDelta:
+		var p bus.PartDeltaPayload
+		if err := json.Unmarshal(w.Payload, &p); err != nil {
+			return Event{}, err
+		}
+		e.Payload = p
+	case bus.EventPartDone:
+		var p bus.PartDonePayload
 		if err := json.Unmarshal(w.Payload, &p); err != nil {
 			return Event{}, err
 		}

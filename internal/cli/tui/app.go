@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/nolouch/gcode/internal/bus"
+	"github.com/nolouch/gcode/internal/model"
 )
 
 // BusEventMsg wraps a bus.Event for delivery to the Bubble Tea update loop.
@@ -54,6 +55,11 @@ type toolEntry struct {
 	output     string
 }
 
+type thinkingEntry struct {
+	content    string
+	durationMs float64
+}
+
 // Model is the Bubble Tea application model.
 type Model struct {
 	// layout
@@ -71,12 +77,16 @@ type Model struct {
 	workDir   string
 	sessionID string
 
-	entries     []msgEntry
-	tools       map[string]*toolEntry // callID -> tool
-	toolOrder   []string              // insertion order
-	thinking    bool
-	thinkingBuf string
-	thinkingMs  float64
+	entries               []msgEntry
+	tools                 map[string]*toolEntry // callID -> tool
+	toolOrder             []string              // insertion order
+	thinkings             []thinkingEntry
+	thinkingIdx           int
+	turnAssistantIdx      int
+	partStreamActive      bool
+	activeReasoningPartID string
+	reasoningPartIdx      map[string]int
+	toolPartCallID        map[string]string
 
 	currentAssistant string // accumulates streaming text
 	running          bool
@@ -122,16 +132,20 @@ func New(modelName, agentName, workDir, sessionID string, eventCh <-chan bus.Eve
 	}
 
 	return Model{
-		model:     modelName,
-		agentName: agentName,
-		workDir:   workDir,
-		sessionID: sessionID,
-		viewport:  vp,
-		textarea:  ta,
-		spinner:   sp,
-		renderer:  renderer,
-		tools:     make(map[string]*toolEntry),
-		eventCh:   eventCh,
+		model:            modelName,
+		agentName:        agentName,
+		workDir:          workDir,
+		sessionID:        sessionID,
+		viewport:         vp,
+		textarea:         ta,
+		spinner:          sp,
+		renderer:         renderer,
+		tools:            make(map[string]*toolEntry),
+		thinkingIdx:      -1,
+		turnAssistantIdx: -1,
+		reasoningPartIdx: make(map[string]int),
+		toolPartCallID:   make(map[string]string),
+		eventCh:          eventCh,
 	}, nil
 }
 
@@ -265,11 +279,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case RunDoneMsg:
 		m.running = false
+		m.thinkingIdx = -1
 		if msg.Err != nil {
-			m.addAssistantEntry(fmt.Sprintf("**Error:** %s", msg.Err.Error()))
-		} else if m.currentAssistant != "" {
-			m.addAssistantEntry(m.currentAssistant)
+			m.turnAssistantIdx = m.addAssistantEntry(fmt.Sprintf("**Error:** %s", msg.Err.Error()))
 			m.currentAssistant = ""
+		} else if m.currentAssistant != "" {
+			m.turnAssistantIdx = m.addAssistantEntry(m.currentAssistant)
+			m.currentAssistant = ""
+		} else {
+			m.turnAssistantIdx = -1
 		}
 		m.refreshViewport()
 
@@ -282,6 +300,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.entries = msg.Entries
 		m.tools = make(map[string]*toolEntry)
 		m.toolOrder = nil
+		m.thinkings = nil
+		m.thinkingIdx = -1
+		m.turnAssistantIdx = -1
+		m.partStreamActive = false
+		m.activeReasoningPartID = ""
+		m.reasoningPartIdx = make(map[string]int)
+		m.toolPartCallID = make(map[string]string)
 		m.currentAssistant = ""
 		m.running = false
 		m.statusNotice = msg.Notice
@@ -300,52 +325,59 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *Model) handleBusEvent(e bus.Event) []tea.Cmd {
 	switch e.Type {
-	case bus.EventTextDelta:
-		if p, ok := e.Payload.(bus.TextDeltaPayload); ok {
-			m.currentAssistant += p.Delta
-			m.refreshViewport()
-		}
-
-	case bus.EventThinking:
-		if p, ok := e.Payload.(bus.ThinkingPayload); ok && p.Delta != "" {
-			m.thinkingBuf += p.Delta
-		}
-		m.thinking = true
-		m.refreshViewport()
-
-	case bus.EventThinkingDone:
-		if p, ok := e.Payload.(bus.ThinkingPayload); ok {
-			m.thinkingMs = p.Duration
-		}
-		m.thinking = false
-		m.refreshViewport()
-
-	case bus.EventToolStart:
-		if p, ok := e.Payload.(bus.ToolPayload); ok {
-			te := &toolEntry{callID: p.CallID, name: p.Tool, state: "running"}
-			m.tools[p.CallID] = te
-			m.toolOrder = append(m.toolOrder, p.CallID)
-			m.refreshViewport()
-		}
-
-	case bus.EventToolDone:
-		if p, ok := e.Payload.(bus.ToolPayload); ok {
-			if te, ok := m.tools[p.CallID]; ok {
-				te.state = "done"
-				te.durationMs = p.DurationMs
-				te.output = p.Output
+	case bus.EventPartUpsert:
+		if p, ok := e.Payload.(bus.PartUpsertPayload); ok {
+			m.partStreamActive = true
+			switch p.Part.Type {
+			case model.PartTypeReasoning:
+				idx := m.ensureThinkingEntryForPart(p.Part.ID)
+				if p.Part.Text != "" {
+					m.thinkings[idx].content = p.Part.Text
+				}
+				m.activeReasoningPartID = p.Part.ID
+				m.refreshViewport()
+			case model.PartTypeTool:
+				m.upsertToolFromPart(p.Part)
+				m.refreshViewport()
 			}
-			m.refreshViewport()
 		}
 
-	case bus.EventToolError:
-		if p, ok := e.Payload.(bus.ToolPayload); ok {
-			if te, ok := m.tools[p.CallID]; ok {
-				te.state = "error"
-				te.durationMs = p.DurationMs
-				te.output = p.Output
+	case bus.EventPartDelta:
+		if p, ok := e.Payload.(bus.PartDeltaPayload); ok {
+			m.partStreamActive = true
+			if p.Field != "text" {
+				break
 			}
-			m.refreshViewport()
+			switch p.PartType {
+			case model.PartTypeText:
+				m.currentAssistant += p.Delta
+				m.refreshViewport()
+			case model.PartTypeReasoning:
+				idx := m.ensureThinkingEntryForPart(p.PartID)
+				m.thinkings[idx].content += p.Delta
+				m.activeReasoningPartID = p.PartID
+				m.refreshViewport()
+			}
+		}
+
+	case bus.EventPartDone:
+		if p, ok := e.Payload.(bus.PartDonePayload); ok {
+			m.partStreamActive = true
+			switch p.PartType {
+			case model.PartTypeReasoning:
+				idx := m.ensureThinkingEntryForPart(p.PartID)
+				m.thinkings[idx].durationMs = p.DurationMs
+				m.activeReasoningPartID = ""
+				m.thinkingIdx = -1
+				m.refreshViewport()
+			case model.PartTypeTool:
+				if callID, ok := m.toolPartCallID[p.PartID]; ok {
+					if te, ok := m.tools[callID]; ok {
+						te.durationMs = int64(p.DurationMs)
+					}
+				}
+				m.refreshViewport()
+			}
 		}
 
 	case bus.EventTurnDone, bus.EventTurnError:
@@ -358,15 +390,79 @@ func (m *Model) addUserEntry(text string) {
 	m.entries = append(m.entries, msgEntry{role: "user", content: text})
 	m.tools = make(map[string]*toolEntry)
 	m.toolOrder = nil
-	m.thinking = false
-	m.thinkingMs = 0
-	m.thinkingBuf = ""
+	m.thinkings = nil
+	m.thinkingIdx = -1
+	m.turnAssistantIdx = -1
+	m.partStreamActive = false
+	m.activeReasoningPartID = ""
+	m.reasoningPartIdx = make(map[string]int)
+	m.toolPartCallID = make(map[string]string)
 	m.refreshViewport()
 }
 
-func (m *Model) addAssistantEntry(text string) {
+func (m *Model) ensureThinkingEntry() int {
+	if m.thinkingIdx >= 0 && m.thinkingIdx < len(m.thinkings) {
+		return m.thinkingIdx
+	}
+	m.thinkings = append(m.thinkings, thinkingEntry{})
+	m.thinkingIdx = len(m.thinkings) - 1
+	return m.thinkingIdx
+}
+
+func (m *Model) ensureThinkingEntryForPart(partID string) int {
+	if partID == "" {
+		return m.ensureThinkingEntry()
+	}
+	if idx, ok := m.reasoningPartIdx[partID]; ok {
+		m.thinkingIdx = idx
+		return idx
+	}
+	m.thinkings = append(m.thinkings, thinkingEntry{})
+	idx := len(m.thinkings) - 1
+	m.reasoningPartIdx[partID] = idx
+	m.thinkingIdx = idx
+	return idx
+}
+
+func (m *Model) addAssistantEntry(text string) int {
 	rendered := m.renderMarkdown(text)
 	m.entries = append(m.entries, msgEntry{role: "assistant", content: rendered})
+	return len(m.entries) - 1
+}
+
+func (m *Model) upsertToolFromPart(part model.Part) {
+	if part.Tool == nil {
+		return
+	}
+	callID := part.Tool.CallID
+	if callID == "" {
+		return
+	}
+	m.toolPartCallID[part.ID] = callID
+	te, exists := m.tools[callID]
+	if !exists {
+		te = &toolEntry{callID: callID}
+		m.tools[callID] = te
+		m.toolOrder = append(m.toolOrder, callID)
+	}
+	te.name = part.Tool.Tool
+	switch part.Tool.State {
+	case model.ToolStateCompleted:
+		te.state = "done"
+		te.output = part.Tool.Output
+	case model.ToolStateError:
+		te.state = "error"
+		te.output = part.Tool.Error
+	case model.ToolStateRunning, model.ToolStatePending:
+		te.state = "running"
+	}
+	if !part.Tool.StartAt.IsZero() && !part.Tool.EndAt.IsZero() {
+		d := part.Tool.EndAt.Sub(part.Tool.StartAt).Milliseconds()
+		if d < 0 {
+			d = 0
+		}
+		te.durationMs = d
+	}
 }
 
 func (m *Model) refreshViewport() {
@@ -381,7 +477,22 @@ func (m *Model) renderMessages() string {
 		w = 80
 	}
 
-	for _, e := range m.entries {
+	tailAssistant := ""
+	hasTailAssistant := false
+	if m.running {
+		if m.currentAssistant != "" {
+			tailAssistant = m.renderMarkdown(m.currentAssistant)
+			hasTailAssistant = true
+		}
+	} else if m.turnAssistantIdx >= 0 && m.turnAssistantIdx < len(m.entries) {
+		tailAssistant = m.entries[m.turnAssistantIdx].content
+		hasTailAssistant = true
+	}
+
+	for i, e := range m.entries {
+		if i == m.turnAssistantIdx {
+			continue
+		}
 		if e.role == "user" {
 			sb.WriteString(StyleUserBorder.Width(w - 4).Render(e.content))
 			sb.WriteString("\n\n")
@@ -391,23 +502,21 @@ func (m *Model) renderMessages() string {
 		}
 	}
 
-	// Live streaming assistant text
-	if m.running && m.currentAssistant != "" {
-		rendered := m.renderMarkdown(m.currentAssistant)
-		sb.WriteString(rendered)
-	}
-
-	// Thinking indicator and content
-	if m.thinking || m.thinkingBuf != "" || m.thinkingMs > 0 {
-		if m.thinking {
+	// Thinking blocks (multiple per turn)
+	for i, t := range m.thinkings {
+		if i == m.thinkingIdx {
 			sb.WriteString(StyleThinkingLabel.Render("💭 Thinking "))
 			sb.WriteString(m.spinner.View())
 			sb.WriteString("\n")
-		} else if m.thinkingMs > 0 {
-			sb.WriteString(StyleThinkingMuted.Render(fmt.Sprintf("💭 Thought for %.0fms\n", m.thinkingMs)))
 		}
-		if t := strings.TrimSpace(m.thinkingBuf); t != "" {
-			sb.WriteString(StyleThinkingMuted.Render(t))
+		if content := strings.TrimSpace(t.content); content != "" {
+			sb.WriteString(StyleThinkingMuted.Render(content))
+			sb.WriteString("\n")
+		}
+		if i != m.thinkingIdx && t.durationMs > 0 {
+			sb.WriteString(StyleThinkingMuted.Render(fmt.Sprintf("💭 Thought for %.0fms\n", t.durationMs)))
+		}
+		if i != len(m.thinkings)-1 {
 			sb.WriteString("\n")
 		}
 	}
@@ -436,6 +545,10 @@ func (m *Model) renderMessages() string {
 				StyleToolMeta.Render(fmt.Sprintf("(%s)", time.Duration(te.durationMs)*time.Millisecond))))
 			sb.WriteString(StyleToolError.Render("  "+te.output) + "\n")
 		}
+	}
+
+	if hasTailAssistant {
+		sb.WriteString(tailAssistant)
 	}
 
 	return sb.String()

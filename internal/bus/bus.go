@@ -4,20 +4,19 @@ package bus
 
 import (
 	"sync"
+
+	"github.com/nolouch/gcode/internal/model"
 )
 
 // EventType identifies the kind of event.
 type EventType string
 
 const (
-	EventTextDelta    EventType = "text.delta"
-	EventThinking     EventType = "thinking.delta"
-	EventThinkingDone EventType = "thinking.done"
-	EventToolStart    EventType = "tool.start"
-	EventToolDone     EventType = "tool.done"
-	EventToolError    EventType = "tool.error"
-	EventTurnDone     EventType = "turn.done"
-	EventTurnError    EventType = "turn.error"
+	EventTurnDone   EventType = "turn.done"
+	EventTurnError  EventType = "turn.error"
+	EventPartUpsert EventType = "message.part.upsert"
+	EventPartDelta  EventType = "message.part.delta"
+	EventPartDone   EventType = "message.part.done"
 )
 
 // Event is a single bus event.
@@ -28,30 +27,29 @@ type Event struct {
 	Payload   any       `json:"payload"`
 }
 
-// TextDeltaPayload carries a streaming text chunk.
-type TextDeltaPayload struct {
-	Delta string `json:"delta"`
-}
-
-// ThinkingPayload carries a reasoning/thinking chunk or duration.
-type ThinkingPayload struct {
-	Delta    string  `json:"delta,omitempty"`
-	Duration float64 `json:"duration_ms,omitempty"` // only on done
-}
-
-// ToolPayload carries tool call metadata.
-type ToolPayload struct {
-	CallID   string         `json:"call_id"`
-	Tool     string         `json:"tool"`
-	Input    map[string]any `json:"input,omitempty"`
-	Output   string         `json:"output,omitempty"`
-	IsError  bool           `json:"is_error,omitempty"`
-	DurationMs int64        `json:"duration_ms,omitempty"`
-}
-
 // TurnDonePayload signals the agent turn finished.
 type TurnDonePayload struct {
 	FinishReason string `json:"finish_reason"`
+}
+
+// PartUpsertPayload carries a full part snapshot.
+type PartUpsertPayload struct {
+	Part model.Part `json:"part"`
+}
+
+// PartDeltaPayload carries an incremental part text update.
+type PartDeltaPayload struct {
+	PartID   string         `json:"part_id"`
+	PartType model.PartType `json:"part_type"`
+	Field    string         `json:"field"`
+	Delta    string         `json:"delta"`
+}
+
+// PartDonePayload marks a part lifecycle boundary completion.
+type PartDonePayload struct {
+	PartID     string         `json:"part_id"`
+	PartType   model.PartType `json:"part_type"`
+	DurationMs float64        `json:"duration_ms,omitempty"`
 }
 
 // Handler is a function that receives events.

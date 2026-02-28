@@ -58,6 +58,25 @@ func Run(
 
 	var streamMu sync.Mutex
 	var streamCancel context.CancelFunc
+	var streamStateMu sync.Mutex
+	streamInconsistent := false
+	markStreamInconsistent := func() {
+		streamStateMu.Lock()
+		streamInconsistent = true
+		streamStateMu.Unlock()
+	}
+	resetStreamInconsistent := func() {
+		streamStateMu.Lock()
+		streamInconsistent = false
+		streamStateMu.Unlock()
+	}
+	consumeStreamInconsistent := func() bool {
+		streamStateMu.Lock()
+		defer streamStateMu.Unlock()
+		v := streamInconsistent
+		streamInconsistent = false
+		return v
+	}
 	subscribeSessionEvents := func(sessionID string) error {
 		streamMu.Lock()
 		defer streamMu.Unlock()
@@ -73,6 +92,7 @@ func Run(
 			return err
 		}
 		streamCancel = cancel
+		resetStreamInconsistent()
 
 		go func() {
 			for {
@@ -84,6 +104,7 @@ func Run(
 					select {
 					case eventCh <- e:
 					default:
+						markStreamInconsistent()
 					}
 				case <-sctx.Done():
 					return
@@ -99,6 +120,7 @@ func Run(
 						return
 					}
 					if err != nil {
+						markStreamInconsistent()
 						return
 					}
 				case <-sctx.Done():
@@ -149,6 +171,39 @@ func Run(
 	// Goroutine: run agent when user sends a message
 	go func() {
 		buildEntries := func(msgs []*model.Message) []msgEntry {
+			renderToolBlock := func(parts []model.Part) string {
+				var tb strings.Builder
+				for _, p := range parts {
+					if p.Type != model.PartTypeTool || p.Tool == nil {
+						continue
+					}
+					sym := "●"
+					suffix := ""
+					switch p.Tool.State {
+					case model.ToolStateCompleted:
+						sym = "✓"
+					case model.ToolStateError:
+						sym = "✗"
+					}
+					if !p.Tool.StartAt.IsZero() && !p.Tool.EndAt.IsZero() {
+						d := p.Tool.EndAt.Sub(p.Tool.StartAt)
+						if d < 0 {
+							d = 0
+						}
+						suffix = fmt.Sprintf(" (%s)", d)
+					}
+					tb.WriteString(fmt.Sprintf("%s %s%s\n", sym, p.Tool.Tool, suffix))
+					if p.Tool.State == model.ToolStateError && p.Tool.Error != "" {
+						out := p.Tool.Error
+						if len(out) > 200 {
+							out = out[:200] + "..."
+						}
+						tb.WriteString("  " + out + "\n")
+					}
+				}
+				return strings.TrimSpace(tb.String())
+			}
+
 			out := make([]msgEntry, 0, len(msgs))
 			for _, m := range msgs {
 				switch m.Role {
@@ -168,15 +223,41 @@ func Run(
 						out = append(out, msgEntry{role: "user", content: text})
 					}
 				case model.RoleAssistant:
+					var reasoning strings.Builder
+					toolBlock := renderToolBlock(m.Parts)
 					var sb strings.Builder
 					for _, p := range m.Parts {
-						if p.Type == model.PartTypeText && p.Text != "" {
-							sb.WriteString(p.Text)
+						switch p.Type {
+						case model.PartTypeReasoning:
+							if text := strings.TrimSpace(p.Text); text != "" {
+								if reasoning.Len() > 0 {
+									reasoning.WriteString("\n\n")
+								}
+								reasoning.WriteString("💭 Thinking\n")
+								reasoning.WriteString(text)
+							}
+						case model.PartTypeText:
+							if p.Text != "" {
+								sb.WriteString(p.Text)
+							}
 						}
 					}
 					text := strings.TrimSpace(sb.String())
+					combined := strings.TrimSpace(reasoning.String())
+					if toolBlock != "" {
+						if combined != "" {
+							combined += "\n\n"
+						}
+						combined += toolBlock
+					}
 					if text != "" {
-						out = append(out, msgEntry{role: "assistant", content: text})
+						if combined != "" {
+							combined += "\n\n"
+						}
+						combined += text
+					}
+					if combined != "" {
+						out = append(out, msgEntry{role: "assistant", content: combined})
 					}
 				}
 			}
@@ -232,6 +313,7 @@ func Run(
 				if text == "" {
 					continue
 				}
+				consumeStreamInconsistent()
 				run, err := client.CreateRun(ctx, currentSessionID, text, agentName)
 				if err == nil {
 					runMu.Lock()
@@ -241,6 +323,12 @@ func Run(
 					runMu.Lock()
 					activeRunID = ""
 					runMu.Unlock()
+				}
+				if err == nil && consumeStreamInconsistent() {
+					msgs, syncErr := client.GetMessages(ctx, currentSessionID)
+					if syncErr == nil {
+						p.Send(SessionSwitchedMsg{SessionID: currentSessionID, Entries: buildEntries(msgs), Notice: "synced after stream gap"})
+					}
 				}
 				p.Send(RunDoneMsg{Err: err})
 			case <-abortCh:
