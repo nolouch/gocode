@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nolouch/gcode/internal/agent"
 	"github.com/nolouch/gcode/internal/server/runs"
 	"github.com/nolouch/gcode/internal/session"
 	"github.com/nolouch/gcode/internal/tool"
@@ -102,6 +103,35 @@ func TestToolsRouteV1_ContainsCoreTools(t *testing.T) {
 	for _, required := range []string{"read", "write", "edit", "glob", "grep", "list", "bash", "apply_patch"} {
 		if !ids[required] {
 			t.Fatalf("missing tool %q in /v1/tools", required)
+		}
+	}
+}
+
+func TestAgentsRouteV1_ListsBuiltins(t *testing.T) {
+	mux := http.NewServeMux()
+	reg := agent.NewRegistry()
+	RegisterAgents(mux, reg)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/agents", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("agents status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var defs []map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &defs); err != nil {
+		t.Fatalf("decode agents: %v", err)
+	}
+	names := map[string]bool{}
+	for _, d := range defs {
+		if name, ok := d["name"].(string); ok {
+			names[name] = true
+		}
+	}
+	for _, required := range []string{"build", "explore", "plan"} {
+		if !names[required] {
+			t.Fatalf("missing agent %q in /v1/agents", required)
 		}
 	}
 }

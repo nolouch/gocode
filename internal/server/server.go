@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/nolouch/gcode/internal/agent"
 	"github.com/nolouch/gcode/internal/bus"
 	"github.com/nolouch/gcode/internal/loop"
 	"github.com/nolouch/gcode/internal/server/routes"
@@ -39,6 +40,10 @@ type Server struct {
 func New(cfg Config, store session.StoreAPI, runner *loop.Runner, b *bus.Bus, tools map[string]tool.Tool) *Server {
 	mux := http.NewServeMux()
 	runMgr := runs.NewManager()
+	var agents *agent.Registry
+	if runner != nil {
+		agents = runner.Agents
+	}
 
 	// Health
 	mux.HandleFunc("GET /v1/health", func(w http.ResponseWriter, r *http.Request) {
@@ -52,6 +57,7 @@ func New(cfg Config, store session.StoreAPI, runner *loop.Runner, b *bus.Bus, to
 	routes.RegisterEvents(mux, b)
 	routes.RegisterConfig(mux)
 	routes.RegisterTools(mux, tools)
+	routes.RegisterAgents(mux, agents)
 
 	return &Server{cfg: cfg, handler: mux}
 }
