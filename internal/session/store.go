@@ -48,6 +48,15 @@ func (s *Store) CreateSession(dir string) *model.Session {
 	return sess
 }
 
+// RestoreSession loads a pre-existing session and its messages into the store.
+// Used by the persistent storage layer on startup.
+func (s *Store) RestoreSession(sess *model.Session, msgs []*model.Message) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sessions[sess.ID] = sess
+	s.messages[sess.ID] = msgs
+}
+
 // ListSessions returns all sessions ordered by UpdatedAt descending.
 func (s *Store) ListSessions() []*model.Session {
 	s.mu.RLock()

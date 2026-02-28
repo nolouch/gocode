@@ -14,8 +14,8 @@ import (
 	"github.com/nolouch/gcode/internal/loop"
 	"github.com/nolouch/gcode/internal/mcp"
 	"github.com/nolouch/gcode/internal/server"
-	"github.com/nolouch/gcode/internal/session"
 	"github.com/nolouch/gcode/internal/skill"
+	"github.com/nolouch/gcode/internal/storage"
 	"github.com/nolouch/gcode/internal/tool"
 	"github.com/nolouch/gcode/internal/tui"
 	"github.com/spf13/cobra"
@@ -40,10 +40,11 @@ func rootCmd() *cobra.Command {
 
 type runtime struct {
 	cfg       *config.Config
-	store     *session.Store
+	store     *storage.PersistentStore
 	runner    *loop.Runner
 	evBus     *bus.Bus
 	mcpMgr    *mcp.Manager
+	db        *storage.DB
 	agentName string
 	workDir   string
 }
@@ -57,7 +58,15 @@ func buildRuntime(ctx context.Context, workDir, agentName string) (*runtime, err
 		return nil, fmt.Errorf("no API key — set OPENAI_API_KEY or provider.api_key in config.yaml")
 	}
 
-	store := session.NewStore()
+	db, err := storage.Open(storage.DefaultPath())
+	if err != nil {
+		return nil, fmt.Errorf("storage: %w", err)
+	}
+	store, err := storage.NewPersistentStore(db)
+	if err != nil {
+		db.Close()
+		return nil, fmt.Errorf("storage: load: %w", err)
+	}
 	agents := agent.NewRegistry()
 	toolReg := tool.NewRegistry()
 
@@ -91,7 +100,7 @@ func buildRuntime(ctx context.Context, workDir, agentName string) (*runtime, err
 
 	evBus := bus.New()
 	runner := &loop.Runner{
-		Store:             store,
+		Store:             store.Store,
 		LLM:               lc,
 		Agents:            agents,
 		Tools:             toolReg.All(),
@@ -101,7 +110,7 @@ func buildRuntime(ctx context.Context, workDir, agentName string) (*runtime, err
 
 	return &runtime{
 		cfg: cfg, store: store, runner: runner,
-		evBus: evBus, mcpMgr: mcpMgr,
+		evBus: evBus, mcpMgr: mcpMgr, db: db,
 		agentName: agentName, workDir: workDir,
 	}, nil
 }
@@ -127,16 +136,17 @@ func tuiCmd() *cobra.Command {
 				return err
 			}
 			defer rt.mcpMgr.Close()
+			defer rt.db.Close()
 
 			// Attach terminal fallback printer (until full TUI is implemented)
 			bus.SubscribeTerminal(rt.evBus)
 
 			// Start server in background
-			srv := server.New(server.Config{Addr: addr}, rt.store, rt.runner, rt.evBus)
+			srv := server.New(server.Config{Addr: addr}, rt.store.Store, rt.runner, rt.evBus)
 			go srv.Listen(ctx)
 
 			// Launch TUI
-			return tui.Run(ctx, rt.cfg.Provider.Model, rt.agentName, workDir, rt.store, rt.runner, rt.evBus)
+			return tui.Run(ctx, rt.cfg.Provider.Model, rt.agentName, workDir, rt.store.Store, rt.runner, rt.evBus)
 		},
 	}
 	cmd.Flags().StringVarP(&workDir, "dir", "d", wd, "Working directory")
@@ -166,8 +176,9 @@ func serveCmd() *cobra.Command {
 				return err
 			}
 			defer rt.mcpMgr.Close()
+			defer rt.db.Close()
 
-			srv := server.New(server.Config{Addr: addr, SocketPath: sock}, rt.store, rt.runner, rt.evBus)
+			srv := server.New(server.Config{Addr: addr, SocketPath: sock}, rt.store.Store, rt.runner, rt.evBus)
 			return srv.Listen(ctx)
 		},
 	}
@@ -201,6 +212,7 @@ func runCmd() *cobra.Command {
 				return err
 			}
 			defer rt.mcpMgr.Close()
+			defer rt.db.Close()
 			bus.SubscribeTerminal(rt.evBus)
 
 			sess := rt.store.CreateSession(workDir)
