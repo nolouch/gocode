@@ -233,6 +233,8 @@ func (p *Processor) Process(
 				result = tool.Result{IsError: true, Output: reason}
 			} else if !exists {
 				result = tool.Result{IsError: true, Output: fmt.Sprintf("unknown tool: %s", event.ToolCallName)}
+			} else if err := tool.ValidateArgs(t.Schema(), args); err != nil {
+				result = tool.Result{IsError: true, Output: fmt.Sprintf("invalid tool args for %s: %v", event.ToolCallName, err)}
 			} else {
 				tctx := tool.Context{
 					SessionID: sid, MessageID: mid,
@@ -241,6 +243,7 @@ func (p *Processor) Process(
 				}
 				result, _ = t.Execute(tctx, args)
 			}
+			result = tool.NormalizeResult(result)
 
 			startTime := toolStartTimes[event.ToolCallID]
 			durationMs := time.Since(startTime).Milliseconds()
