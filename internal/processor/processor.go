@@ -274,7 +274,7 @@ func (p *Processor) Process(
 		case llm.TypeStepFinish:
 			flushThinking()
 			if event.FinishReason != "" {
-				p.Message.Finish = event.FinishReason
+				p.Message.Finish = normalizeFinishReason(event.FinishReason)
 			}
 			p.Message.Tokens.Input += event.Usage.Input
 			p.Message.Tokens.Output += event.Usage.Output
@@ -313,10 +313,35 @@ func (p *Processor) Process(
 	p.Message.Parts = compactTextParts(p.Message.Parts)
 	p.store.UpdateMessage(p.Message)
 
-	if p.Message.Finish == "tool_calls" || p.Message.Finish == "tool-calls" {
+	finish := normalizeFinishReason(p.Message.Finish)
+	p.Message.Finish = finish
+	p.store.UpdateMessage(p.Message)
+
+	if finish == "tool-calls" {
+		return model.ProcessResultContinue, toolMessages
+	}
+	if finish == "length" {
+		return model.ProcessResultCompact, toolMessages
+	}
+	if finish == "unknown" && len(toolMessages) > 0 {
 		return model.ProcessResultContinue, toolMessages
 	}
 	return model.ProcessResultStop, nil
+}
+
+func normalizeFinishReason(reason string) string {
+	s := strings.ToLower(strings.TrimSpace(reason))
+	s = strings.ReplaceAll(s, "_", "-")
+	if s == "" {
+		return "unknown"
+	}
+	if s == "tool-calls" {
+		return "tool-calls"
+	}
+	if s == "max-tokens" {
+		return "length"
+	}
+	return s
 }
 
 func denyToolByPolicy(agentName, toolName string, args map[string]any) (bool, string) {

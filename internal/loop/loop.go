@@ -26,7 +26,10 @@ import (
 	"github.com/nolouch/gcode/internal/tool"
 )
 
-const maxRetries = 3
+const (
+	maxRetries         = 3
+	historyCompactKeep = 24
+)
 
 // Runner is the top-level agent loop runner.
 type Runner struct {
@@ -123,6 +126,7 @@ func (r *Runner) Run(ctx context.Context, sessionID string, userText string, age
 	const crossStepThreshold = 3
 
 	step := 0
+	compactNext := false
 	for {
 		step++
 		if step > maxSteps {
@@ -140,6 +144,11 @@ func (r *Runner) Run(ctx context.Context, sessionID string, userText string, age
 
 		// ── Build message history for this LLM call ──────────────
 		history := buildHistory(store.Messages(sessionID))
+		if compactNext && len(history) > historyCompactKeep {
+			history = history[len(history)-historyCompactKeep:]
+			r.logf("[loop] compacted history to last %d messages\n", len(history))
+			compactNext = false
+		}
 		history = append(history, extraMessages...)
 		extraMessages = nil
 		r.debugf("step=%d history_messages=%d\n", step, len(history))
@@ -226,9 +235,9 @@ func (r *Runner) Run(ctx context.Context, sessionID string, userText string, age
 			r.debugf("step=%d continue with extra_messages=%d\n", step, len(extraMessages))
 			continue
 		case model.ProcessResultCompact:
-			// Simple compaction: keep only the last user message
-			// (MVP: a real implementation would summarise)
-			r.logf("[loop] context compaction triggered (not fully implemented)\n")
+			compactNext = true
+			r.logf("[loop] context compaction triggered\n")
+			continue
 		}
 
 		// Stop

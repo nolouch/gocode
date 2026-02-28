@@ -49,6 +49,43 @@ func TestProcess_UsesArgsFromToolCallDoneEvent(t *testing.T) {
 	}
 }
 
+func TestProcess_ReturnsCompactOnLengthFinish(t *testing.T) {
+	store := session.NewStore()
+	sess := store.CreateSession(".")
+
+	msg := &model.Message{
+		ID:        session.NewID(),
+		SessionID: sess.ID,
+		Role:      model.RoleAssistant,
+		CreatedAt: time.Now(),
+	}
+	store.AddMessage(msg)
+
+	streamCh := make(chan llm.StreamEvent, 1)
+	streamCh <- llm.StreamEvent{Type: llm.TypeStepFinish, FinishReason: "max_tokens"}
+	close(streamCh)
+
+	proc := New(store, nil, msg)
+	result, _ := proc.Process(context.Background(), streamCh, map[string]tool.Tool{}, ".")
+	if result != model.ProcessResultCompact {
+		t.Fatalf("expected compact, got %q", result)
+	}
+}
+
+func TestNormalizeFinishReason(t *testing.T) {
+	cases := map[string]string{
+		"tool_calls":  "tool-calls",
+		"tool-calls":  "tool-calls",
+		"":            "unknown",
+		" max_tokens": "length",
+	}
+	for in, want := range cases {
+		if got := normalizeFinishReason(in); got != want {
+			t.Fatalf("normalizeFinishReason(%q)=%q want %q", in, got, want)
+		}
+	}
+}
+
 func TestProcess_ReasoningPartDeltaAndDoneArePublished(t *testing.T) {
 	store := session.NewStore()
 	sess := store.CreateSession(".")
