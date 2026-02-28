@@ -48,6 +48,25 @@ func (s *Store) CreateSession(dir string) *model.Session {
 	return sess
 }
 
+// ListSessions returns all sessions ordered by UpdatedAt descending.
+func (s *Store) ListSessions() []*model.Session {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]*model.Session, 0, len(s.sessions))
+	for _, sess := range s.sessions {
+		out = append(out, sess)
+	}
+	// sort newest first
+	for i := 0; i < len(out)-1; i++ {
+		for j := i + 1; j < len(out); j++ {
+			if out[j].UpdatedAt.After(out[i].UpdatedAt) {
+				out[i], out[j] = out[j], out[i]
+			}
+		}
+	}
+	return out
+}
+
 // GetSession returns a session by ID.
 func (s *Store) GetSession(id string) (*model.Session, error) {
 	s.mu.RLock()
