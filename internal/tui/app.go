@@ -20,6 +20,25 @@ type BusEventMsg struct{ Event bus.Event }
 // RunDoneMsg signals the agent turn finished.
 type RunDoneMsg struct{ Err error }
 
+type SessionCommandType int
+
+const (
+	SessionCommandNew SessionCommandType = iota + 1
+	SessionCommandNext
+)
+
+type SessionCommand struct {
+	Type SessionCommandType
+}
+
+// SessionSwitchedMsg updates the UI with a different session and preloaded history.
+type SessionSwitchedMsg struct {
+	SessionID string
+	Entries   []msgEntry
+	Notice    string
+	Err       error
+}
+
 // msgEntry is a rendered message in the viewport.
 type msgEntry struct {
 	role    string // "user" | "assistant"
@@ -61,6 +80,8 @@ type Model struct {
 
 	currentAssistant strings.Builder // accumulates streaming text
 	running          bool
+	showHelp         bool
+	statusNotice     string
 
 	// glamour renderer
 	renderer *glamour.TermRenderer
@@ -71,12 +92,14 @@ type Model struct {
 	sendCh chan<- string
 	// channel to request abort of the active run
 	abortCh chan<- struct{}
+	// channel to request session control operations from runtime goroutine
+	sessionCmdCh chan<- SessionCommand
 }
 
 // New creates a new TUI Model.
 func New(modelName, agentName, workDir, sessionID string, eventCh <-chan bus.Event) (Model, error) {
 	ta := textarea.New()
-	ta.Placeholder = "Type a message… (Ctrl+S to send, Ctrl+C to cancel)"
+	ta.Placeholder = "Type a message... (Enter send, Shift+Enter newline, Esc interrupt)"
 	ta.Focus()
 	ta.SetWidth(80)
 	ta.SetHeight(3)
@@ -91,11 +114,11 @@ func New(modelName, agentName, workDir, sessionID string, eventCh <-chan bus.Eve
 	vp.SetContent("")
 
 	renderer, err := glamour.NewTermRenderer(
-		glamour.WithAutoStyle(),
+		glamour.WithStandardStyle("notty"),
 		glamour.WithWordWrap(80),
 	)
 	if err != nil {
-		renderer, _ = glamour.NewTermRenderer(glamour.WithAutoStyle())
+		renderer = nil
 	}
 
 	return Model{
@@ -133,6 +156,7 @@ func (m Model) Init() tea.Cmd {
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
+	updateTextarea := true
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -141,8 +165,54 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.relayout()
 
 	case tea.KeyMsg:
-		switch msg.Type {
-		case tea.KeyCtrlC:
+		if m.showHelp {
+			if msg.String() == "ctrl+p" || msg.Type == tea.KeyEsc {
+				m.showHelp = false
+				updateTextarea = false
+				break
+			}
+		}
+
+		if msg.String() == "ctrl+p" {
+			m.showHelp = !m.showHelp
+			updateTextarea = false
+			break
+		}
+
+		if msg.String() == "ctrl+n" {
+			if !m.running && m.sessionCmdCh != nil {
+				select {
+				case m.sessionCmdCh <- SessionCommand{Type: SessionCommandNew}:
+				default:
+				}
+			}
+			updateTextarea = false
+			break
+		}
+
+		if msg.String() == "ctrl+l" {
+			if !m.running && m.sessionCmdCh != nil {
+				select {
+				case m.sessionCmdCh <- SessionCommand{Type: SessionCommandNext}:
+				default:
+				}
+			}
+			updateTextarea = false
+			break
+		}
+
+		if isAbortKey(msg) {
+			if m.running && m.abortCh != nil {
+				select {
+				case m.abortCh <- struct{}{}:
+				default:
+				}
+			}
+			updateTextarea = false
+			break
+		}
+
+		if isExitKey(msg) {
 			if !m.running {
 				return m, tea.Quit
 			}
@@ -152,7 +222,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				default:
 				}
 			}
-		case tea.KeyCtrlS, tea.KeyCtrlD:
+			updateTextarea = false
+			break
+		}
+
+		if isSubmitKey(msg) {
 			if !m.running {
 				text := strings.TrimSpace(m.textarea.Value())
 				if text != "" {
@@ -165,6 +239,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 			}
+			updateTextarea = false
+			break
+		}
+
+		if isNewlineKey(msg) {
+			if !m.running {
+				m.textarea.InsertString("\n")
+			}
+			updateTextarea = false
+			break
 		}
 
 	case spinner.TickMsg:
@@ -188,10 +272,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.currentAssistant.Reset()
 		}
 		m.refreshViewport()
+
+	case SessionSwitchedMsg:
+		if msg.Err != nil {
+			m.statusNotice = "session: " + msg.Err.Error()
+			break
+		}
+		m.sessionID = msg.SessionID
+		m.entries = msg.Entries
+		m.tools = make(map[string]*toolEntry)
+		m.toolOrder = nil
+		m.currentAssistant.Reset()
+		m.running = false
+		m.statusNotice = msg.Notice
+		m.refreshViewport()
 	}
 
 	var taCmd, vpCmd tea.Cmd
-	m.textarea, taCmd = m.textarea.Update(msg)
+	if updateTextarea {
+		m.textarea, taCmd = m.textarea.Update(msg)
+	}
 	m.viewport, vpCmd = m.viewport.Update(msg)
 	cmds = append(cmds, taCmd, vpCmd)
 
@@ -258,10 +358,7 @@ func (m *Model) addUserEntry(text string) {
 }
 
 func (m *Model) addAssistantEntry(text string) {
-	rendered, err := m.renderer.Render(text)
-	if err != nil {
-		rendered = text
-	}
+	rendered := m.renderMarkdown(text)
 	m.entries = append(m.entries, msgEntry{role: "assistant", content: rendered})
 }
 
@@ -289,10 +386,7 @@ func (m *Model) renderMessages() string {
 
 	// Live streaming assistant text
 	if m.running && m.currentAssistant.Len() > 0 {
-		rendered, err := m.renderer.Render(m.currentAssistant.String())
-		if err != nil {
-			rendered = m.currentAssistant.String()
-		}
+		rendered := m.renderMarkdown(m.currentAssistant.String())
 		sb.WriteString(rendered)
 	}
 
@@ -355,6 +449,7 @@ func (m Model) View() string {
 	return lipgloss.JoinVertical(lipgloss.Left,
 		header,
 		m.viewport.View(),
+		m.renderHelp(),
 		input,
 		footer,
 	)
@@ -363,6 +458,13 @@ func (m Model) View() string {
 func (m Model) renderHeader() string {
 	title := StyleHeader.Render("gcode")
 	meta := StyleHeaderMeta.Render(fmt.Sprintf("  %s · %s · %s", m.model, m.agentName, m.workDir))
+	if m.sessionID != "" {
+		sid := m.sessionID
+		if len(sid) > 8 {
+			sid = sid[:8]
+		}
+		meta = StyleHeaderMeta.Render(fmt.Sprintf("  %s · %s · %s · session:%s", m.model, m.agentName, m.workDir, sid))
+	}
 	line := lipgloss.JoinHorizontal(lipgloss.Top, title, meta)
 	return StyleHeaderBorder.Width(m.width).Render(line)
 }
@@ -379,7 +481,10 @@ func (m Model) renderFooter() string {
 	} else {
 		status = StyleStatusOK.Render("●") + " ready"
 	}
-	hints := StyleFooter.Render("Ctrl+S send · Ctrl+C quit")
+	hints := StyleFooter.Render("Enter send · Shift+Enter newline · Esc interrupt · Ctrl+N new · Ctrl+L switch · Ctrl+P help · Ctrl+C quit")
+	if m.statusNotice != "" {
+		hints = StyleFooter.Render(m.statusNotice + " · Enter send · Shift+Enter newline · Esc interrupt · Ctrl+N new · Ctrl+L switch · Ctrl+P help · Ctrl+C quit")
+	}
 	gap := m.width - lipgloss.Width(status) - lipgloss.Width(hints)
 	if gap < 1 {
 		gap = 1
@@ -388,11 +493,62 @@ func (m Model) renderFooter() string {
 	return StyleFooterBorder.Width(m.width).Render(line)
 }
 
+func (m Model) renderHelp() string {
+	if !m.showHelp {
+		return ""
+	}
+	text := "Shortcuts\n" +
+		"Enter: submit\n" +
+		"Shift/Ctrl/Alt+Enter or Ctrl+J: newline\n" +
+		"Esc: interrupt current run\n" +
+		"Ctrl+N: new session\n" +
+		"Ctrl+L: switch session (cycle)\n" +
+		"Ctrl+C / Ctrl+D: exit (idle) or interrupt (running)\n" +
+		"Ctrl+P: toggle help"
+	return StyleInputBorder.Width(m.width).Render(text)
+}
+
+func (m *Model) renderMarkdown(text string) string {
+	if m.renderer == nil {
+		return text
+	}
+	rendered, err := m.renderer.Render(text)
+	if err != nil {
+		return text
+	}
+	return rendered
+}
+
+func isSubmitKey(msg tea.KeyMsg) bool {
+	s := strings.ToLower(msg.String())
+	return s == "enter" || s == "return"
+}
+
+func isNewlineKey(msg tea.KeyMsg) bool {
+	s := strings.ToLower(msg.String())
+	switch s {
+	case "shift+enter", "shift+return", "ctrl+enter", "ctrl+return", "alt+enter", "alt+return", "ctrl+j":
+		return true
+	default:
+		return false
+	}
+}
+
+func isAbortKey(msg tea.KeyMsg) bool {
+	s := strings.ToLower(msg.String())
+	return s == "esc" || s == "escape"
+}
+
+func isExitKey(msg tea.KeyMsg) bool {
+	s := strings.ToLower(msg.String())
+	return s == "ctrl+c" || s == "ctrl+d"
+}
+
 func (m *Model) relayout() {
 	m.textarea.SetWidth(m.width - 2)
 	if m.renderer != nil {
 		m.renderer, _ = glamour.NewTermRenderer(
-			glamour.WithAutoStyle(),
+			glamour.WithStandardStyle("notty"),
 			glamour.WithWordWrap(m.width-4),
 		)
 	}

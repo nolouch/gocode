@@ -34,6 +34,13 @@ type Runner struct {
 	Tools             map[string]tool.Tool // built-ins + MCP
 	SystemPromptExtra []string             // skill system prompt fragments
 	Bus               *bus.Bus             // event bus (nil = no events)
+	Logf              func(format string, args ...any)
+}
+
+func (r *Runner) logf(format string, args ...any) {
+	if r.Logf != nil {
+		r.Logf(format, args...)
+	}
 }
 
 // Run executes the agent loop for the given session + user message text.
@@ -100,7 +107,7 @@ func (r *Runner) Run(ctx context.Context, sessionID string, userText string, age
 	for {
 		step++
 		if step > maxSteps {
-			fmt.Printf("[loop] max steps (%d) reached\n", maxSteps)
+			r.logf("[loop] max steps (%d) reached\n", maxSteps)
 			break
 		}
 
@@ -110,16 +117,7 @@ func (r *Runner) Run(ctx context.Context, sessionID string, userText string, age
 		default:
 		}
 
-		// Check exit: if the last assistant message is fully finished
-		lastAsst := store.LastAssistantMessage(sessionID)
-		if lastAsst != nil && lastAsst.Finish != "" &&
-			lastAsst.Finish != "tool_calls" && lastAsst.Finish != "tool-calls" &&
-			lastAsst.Error == nil {
-			fmt.Printf("\n[loop] done at step %d (finish=%s)\n", step, lastAsst.Finish)
-			break
-		}
-
-		fmt.Printf("\n[loop] step %d\n", step)
+		r.logf("\n[loop] step %d\n", step)
 
 		// ── Build message history for this LLM call ──────────────
 		history := buildHistory(store.Messages(sessionID))
@@ -154,7 +152,7 @@ func (r *Runner) Run(ctx context.Context, sessionID string, userText string, age
 			}
 			if attempt < maxRetries {
 				wait := time.Duration(1<<uint(attempt)) * time.Second
-				fmt.Printf("[loop] LLM error (attempt %d): %v, retrying in %v\n", attempt+1, streamErr, wait)
+				r.logf("[loop] LLM error (attempt %d): %v, retrying in %v\n", attempt+1, streamErr, wait)
 				select {
 				case <-time.After(wait):
 				case <-ctx.Done():
@@ -181,7 +179,7 @@ func (r *Runner) Run(ctx context.Context, sessionID string, userText string, age
 			if sig == lastSig {
 				consecutiveSame++
 				if consecutiveSame >= crossStepThreshold {
-					fmt.Printf("\n[warn] cross-step doom loop detected for tool %s, stopping\n", sig.tool)
+					r.logf("\n[warn] cross-step doom loop detected for tool %s, stopping\n", sig.tool)
 					break
 				}
 			} else {
@@ -203,7 +201,7 @@ func (r *Runner) Run(ctx context.Context, sessionID string, userText string, age
 		case model.ProcessResultCompact:
 			// Simple compaction: keep only the last user message
 			// (MVP: a real implementation would summarise)
-			fmt.Printf("[loop] context compaction triggered (not fully implemented)\n")
+			r.logf("[loop] context compaction triggered (not fully implemented)\n")
 		}
 
 		// Stop

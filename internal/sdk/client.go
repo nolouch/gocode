@@ -82,6 +82,48 @@ func (c *Client) CreateSession(ctx context.Context, workDir string) (*model.Sess
 	return &out, nil
 }
 
+func (c *Client) ListSessions(ctx context.Context) ([]*model.Session, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.endpoint("/v1/sessions"), nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("list sessions: %s", string(body))
+	}
+	var out []*model.Session
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *Client) GetMessages(ctx context.Context, sessionID string) ([]*model.Message, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.endpoint("/v1/sessions/"+sessionID+"/messages"), nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("get messages: %s", string(body))
+	}
+	var out []*model.Message
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *Client) CreateRun(ctx context.Context, sessionID string, text string, agent string) (*Run, error) {
 	reqBody, _ := json.Marshal(map[string]string{
 		"text":  text,

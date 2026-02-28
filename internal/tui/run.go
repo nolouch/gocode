@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/nolouch/gcode/internal/bus"
+	"github.com/nolouch/gcode/internal/model"
 	"github.com/nolouch/gcode/internal/sdk"
 )
 
@@ -51,42 +53,73 @@ func Run(
 		return fmt.Errorf("create session: %w", sessIDErr)
 	}
 
-	stream, errs, err := client.SubscribeEvents(ctx, sessID)
-	if err != nil {
-		return fmt.Errorf("subscribe events: %w", err)
-	}
-
 	// Channel to pipe sdk events into Bubble Tea.
 	eventCh := make(chan bus.Event, 128)
-	go func() {
-		defer close(eventCh)
-		for {
-			select {
-			case e, ok := <-stream:
-				if !ok {
-					return
-				}
-				select {
-				case eventCh <- e:
-				default:
-				}
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
 
-	go func() {
-		for {
-			select {
-			case err, ok := <-errs:
-				if ok && err != nil {
+	var streamMu sync.Mutex
+	var streamCancel context.CancelFunc
+	subscribeSessionEvents := func(sessionID string) error {
+		streamMu.Lock()
+		defer streamMu.Unlock()
+		if streamCancel != nil {
+			streamCancel()
+			streamCancel = nil
+		}
+
+		sctx, cancel := context.WithCancel(ctx)
+		stream, errs, err := client.SubscribeEvents(sctx, sessionID)
+		if err != nil {
+			cancel()
+			return err
+		}
+		streamCancel = cancel
+
+		go func() {
+			for {
+				select {
+				case e, ok := <-stream:
+					if !ok {
+						return
+					}
+					select {
+					case eventCh <- e:
+					default:
+					}
+				case <-sctx.Done():
 					return
 				}
-			case <-ctx.Done():
-				return
 			}
+		}()
+
+		go func() {
+			for {
+				select {
+				case err, ok := <-errs:
+					if !ok {
+						return
+					}
+					if err != nil {
+						return
+					}
+				case <-sctx.Done():
+					return
+				}
+			}
+		}()
+
+		return nil
+	}
+
+	if err := subscribeSessionEvents(sessID); err != nil {
+		return fmt.Errorf("subscribe events: %w", err)
+	}
+	defer func() {
+		streamMu.Lock()
+		if streamCancel != nil {
+			streamCancel()
 		}
+		streamMu.Unlock()
+		close(eventCh)
 	}()
 
 	m, err := New(modelName, agentName, workDir, sessID, eventCh)
@@ -102,16 +135,68 @@ func Run(
 	// Instead, we use a goroutine that watches for user input signals via a channel.
 	sendCh := make(chan string, 1)
 	abortCh := make(chan struct{}, 1)
+	sessionCmdCh := make(chan SessionCommand, 4)
 	var runMu sync.Mutex
 	activeRunID := ""
+	currentSessionID := sessID
 
 	// Patch: override the model to use sendCh
 	m.sendCh = sendCh
 	m.abortCh = abortCh
+	m.sessionCmdCh = sessionCmdCh
 	p = tea.NewProgram(m, tea.WithAltScreen(), tea.WithContext(ctx))
 
 	// Goroutine: run agent when user sends a message
 	go func() {
+		buildEntries := func(msgs []*model.Message) []msgEntry {
+			out := make([]msgEntry, 0, len(msgs))
+			for _, m := range msgs {
+				switch m.Role {
+				case model.RoleUser:
+					text := strings.TrimSpace(m.Text)
+					if text == "" {
+						for _, p := range m.Parts {
+							if p.Type == model.PartTypeText {
+								text = strings.TrimSpace(p.Text)
+								if text != "" {
+									break
+								}
+							}
+						}
+					}
+					if text != "" {
+						out = append(out, msgEntry{role: "user", content: text})
+					}
+				case model.RoleAssistant:
+					var sb strings.Builder
+					for _, p := range m.Parts {
+						if p.Type == model.PartTypeText && p.Text != "" {
+							sb.WriteString(p.Text)
+						}
+					}
+					text := strings.TrimSpace(sb.String())
+					if text != "" {
+						out = append(out, msgEntry{role: "assistant", content: text})
+					}
+				}
+			}
+			return out
+		}
+
+		loadAndSwitchSession := func(targetSessionID string, notice string) {
+			if err := subscribeSessionEvents(targetSessionID); err != nil {
+				p.Send(SessionSwitchedMsg{Err: err})
+				return
+			}
+			msgs, err := client.GetMessages(ctx, targetSessionID)
+			if err != nil {
+				p.Send(SessionSwitchedMsg{Err: err})
+				return
+			}
+			currentSessionID = targetSessionID
+			p.Send(SessionSwitchedMsg{SessionID: targetSessionID, Entries: buildEntries(msgs), Notice: notice})
+		}
+
 		pollRun := func(runID string) error {
 			for {
 				run, err := client.GetRun(ctx, runID)
@@ -147,7 +232,7 @@ func Run(
 				if text == "" {
 					continue
 				}
-				run, err := client.CreateRun(ctx, sessID, text, agentName)
+				run, err := client.CreateRun(ctx, currentSessionID, text, agentName)
 				if err == nil {
 					runMu.Lock()
 					activeRunID = run.ID
@@ -164,6 +249,48 @@ func Run(
 				runMu.Unlock()
 				if rid != "" {
 					_ = client.AbortRun(ctx, rid)
+				}
+			case cmd := <-sessionCmdCh:
+				runMu.Lock()
+				busy := activeRunID != ""
+				runMu.Unlock()
+				if busy {
+					p.Send(SessionSwitchedMsg{Err: fmt.Errorf("cannot switch session while a run is active")})
+					continue
+				}
+				switch cmd.Type {
+				case SessionCommandNew:
+					sess, err := client.CreateSession(ctx, workDir)
+					if err != nil {
+						p.Send(SessionSwitchedMsg{Err: err})
+						continue
+					}
+					loadAndSwitchSession(sess.ID, "new session created")
+				case SessionCommandNext:
+					sessions, err := client.ListSessions(ctx)
+					if err != nil {
+						p.Send(SessionSwitchedMsg{Err: err})
+						continue
+					}
+					if len(sessions) == 0 {
+						p.Send(SessionSwitchedMsg{Err: fmt.Errorf("no sessions available")})
+						continue
+					}
+					sort.Slice(sessions, func(i, j int) bool {
+						return sessions[i].UpdatedAt.After(sessions[j].UpdatedAt)
+					})
+					next := sessions[0].ID
+					for i, s := range sessions {
+						if s.ID == currentSessionID {
+							next = sessions[(i+1)%len(sessions)].ID
+							break
+						}
+					}
+					if next == currentSessionID {
+						p.Send(SessionSwitchedMsg{SessionID: currentSessionID, Notice: "already on latest session"})
+						continue
+					}
+					loadAndSwitchSession(next, "session switched")
 				}
 			case <-ctx.Done():
 				return

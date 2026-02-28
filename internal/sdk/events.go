@@ -14,6 +14,59 @@ import (
 
 type Event = bus.Event
 
+type wireEvent struct {
+	Type      bus.EventType   `json:"type"`
+	SessionID string          `json:"session_id"`
+	MessageID string          `json:"message_id"`
+	Payload   json.RawMessage `json:"payload"`
+}
+
+func decodeWireEvent(payload string) (Event, error) {
+	var w wireEvent
+	if err := json.Unmarshal([]byte(payload), &w); err != nil {
+		return Event{}, err
+	}
+	e := Event{Type: w.Type, SessionID: w.SessionID, MessageID: w.MessageID}
+	if len(w.Payload) == 0 || string(w.Payload) == "null" {
+		return e, nil
+	}
+
+	switch w.Type {
+	case bus.EventTextDelta:
+		var p bus.TextDeltaPayload
+		if err := json.Unmarshal(w.Payload, &p); err != nil {
+			return Event{}, err
+		}
+		e.Payload = p
+	case bus.EventThinking, bus.EventThinkingDone:
+		var p bus.ThinkingPayload
+		if err := json.Unmarshal(w.Payload, &p); err != nil {
+			return Event{}, err
+		}
+		e.Payload = p
+	case bus.EventToolStart, bus.EventToolDone, bus.EventToolError:
+		var p bus.ToolPayload
+		if err := json.Unmarshal(w.Payload, &p); err != nil {
+			return Event{}, err
+		}
+		e.Payload = p
+	case bus.EventTurnDone, bus.EventTurnError:
+		var p bus.TurnDonePayload
+		if err := json.Unmarshal(w.Payload, &p); err != nil {
+			return Event{}, err
+		}
+		e.Payload = p
+	default:
+		var p map[string]any
+		if err := json.Unmarshal(w.Payload, &p); err != nil {
+			return Event{}, err
+		}
+		e.Payload = p
+	}
+
+	return e, nil
+}
+
 func (c *Client) SubscribeEvents(ctx context.Context, sessionID string) (<-chan Event, <-chan error, error) {
 	events := make(chan Event, 64)
 	errs := make(chan error, 1)
@@ -62,8 +115,8 @@ func (c *Client) SubscribeEvents(ctx context.Context, sessionID string) (<-chan 
 				return
 			}
 			payload := strings.Join(dataLines, "\n")
-			var e Event
-			if err := json.Unmarshal([]byte(payload), &e); err != nil {
+			e, err := decodeWireEvent(payload)
+			if err != nil {
 				select {
 				case errs <- err:
 				default:

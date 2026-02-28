@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/nolouch/gcode/internal/agent"
 	"github.com/nolouch/gcode/internal/bus"
@@ -46,8 +48,37 @@ type runtime struct {
 	evBus     *bus.Bus
 	mcpMgr    *mcp.Manager
 	db        *storage.DB
+	logFile   *os.File
 	agentName string
 	workDir   string
+}
+
+func (r *runtime) Close() {
+	if r.mcpMgr != nil {
+		r.mcpMgr.Close()
+	}
+	if r.db != nil {
+		r.db.Close()
+	}
+	if r.logFile != nil {
+		r.logFile.Close()
+	}
+}
+
+func openLoopLogFile() *os.File {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	logDir := filepath.Join(home, ".gcode", "logs")
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		return nil
+	}
+	f, err := os.OpenFile(filepath.Join(logDir, "loop.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return nil
+	}
+	return f
 }
 
 func buildRuntime(ctx context.Context, workDir, agentName string) (*runtime, error) {
@@ -100,6 +131,7 @@ func buildRuntime(ctx context.Context, workDir, agentName string) (*runtime, err
 	}
 
 	evBus := bus.New()
+	logFile := openLoopLogFile()
 	runner := &loop.Runner{
 		Store:             store,
 		LLM:               lc,
@@ -107,11 +139,18 @@ func buildRuntime(ctx context.Context, workDir, agentName string) (*runtime, err
 		Tools:             toolReg.All(),
 		SystemPromptExtra: skillPrompts,
 		Bus:               evBus,
+		Logf: func(format string, args ...any) {
+			if logFile == nil {
+				return
+			}
+			_, _ = fmt.Fprintf(logFile, "%s ", time.Now().Format(time.RFC3339))
+			_, _ = fmt.Fprintf(logFile, format, args...)
+		},
 	}
 
 	return &runtime{
 		cfg: cfg, store: store, runner: runner,
-		evBus: evBus, mcpMgr: mcpMgr, db: db,
+		evBus: evBus, mcpMgr: mcpMgr, db: db, logFile: logFile,
 		agentName: agentName, workDir: workDir,
 	}, nil
 }
@@ -130,15 +169,14 @@ func tuiCmd() *cobra.Command {
 		Use:   "tui",
 		Short: "Start interactive TUI (default)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+			ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
 			defer cancel()
 
 			rt, err := buildRuntime(ctx, workDir, agentName)
 			if err != nil {
 				return err
 			}
-			defer rt.mcpMgr.Close()
-			defer rt.db.Close()
+			defer rt.Close()
 
 			// Start server in background
 			srv := server.New(server.Config{Addr: addr, SocketPath: sock}, rt.store, rt.runner, rt.evBus, rt.runner.Tools)
@@ -168,15 +206,14 @@ func serveCmd() *cobra.Command {
 		Use:   "serve",
 		Short: "Start agent server (no TUI)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+			ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
 			defer cancel()
 
 			rt, err := buildRuntime(ctx, workDir, "build")
 			if err != nil {
 				return err
 			}
-			defer rt.mcpMgr.Close()
-			defer rt.db.Close()
+			defer rt.Close()
 
 			srv := server.New(server.Config{Addr: addr, SocketPath: sock}, rt.store, rt.runner, rt.evBus, rt.runner.Tools)
 			return srv.Listen(ctx)
@@ -204,15 +241,14 @@ func runCmd() *cobra.Command {
 			if prompt == "" {
 				return fmt.Errorf("--prompt/-p is required")
 			}
-			ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+			ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
 			defer cancel()
 
 			rt, err := buildRuntime(ctx, workDir, agentName)
 			if err != nil {
 				return err
 			}
-			defer rt.mcpMgr.Close()
-			defer rt.db.Close()
+			defer rt.Close()
 			bus.SubscribeTerminal(rt.evBus)
 
 			sess := rt.store.CreateSession(workDir)
