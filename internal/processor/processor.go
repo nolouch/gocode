@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nolouch/gcode/internal/bus"
 	"github.com/nolouch/gcode/internal/llm"
 	"github.com/nolouch/gcode/internal/model"
 	"github.com/nolouch/gcode/internal/session"
@@ -22,12 +23,19 @@ const doomLoopThreshold = 3
 // Processor handles one assistant message turn.
 type Processor struct {
 	store   *session.Store
+	Bus     *bus.Bus
 	Message *model.Message
 }
 
 // New creates a Processor for the given (pre-saved) assistant message.
-func New(store *session.Store, msg *model.Message) *Processor {
-	return &Processor{store: store, Message: msg}
+func New(store *session.Store, b *bus.Bus, msg *model.Message) *Processor {
+	return &Processor{store: store, Bus: b, Message: msg}
+}
+
+func (p *Processor) publish(e bus.Event) {
+	if p.Bus != nil {
+		p.Bus.Publish(e)
+	}
 }
 
 // Process consumes a stream from the LLM, executes tools, and updates the
@@ -40,19 +48,18 @@ func (p *Processor) Process(
 ) (model.ProcessResult, []model.ChatMessage) {
 	var (
 		currentTextPart *model.Part
-		toolParts       = make(map[string]*model.Part) // callID -> part
+		toolParts       = make(map[string]*model.Part)
 		toolArgsAcc     = make(map[string]*strings.Builder)
-		toolMessages    []model.ChatMessage // tool results to append to history
+		toolMessages    []model.ChatMessage
 
-		// Thinking tracking
 		thinkingStart   time.Time
 		thinkingContent strings.Builder
-
-		// Tool tracking
-		toolStartTimes = make(map[string]time.Time)
+		toolStartTimes  = make(map[string]time.Time)
 	)
 
 	partID := func() string { return session.NewID() }
+	sid := p.Message.SessionID
+	mid := p.Message.ID
 
 	for event := range streamCh {
 		select {
@@ -66,60 +73,58 @@ func (p *Processor) Process(
 
 		switch event.Type {
 		case llm.TypeReasoningDelta:
-			// Stream thinking content
 			if thinkingContent.Len() == 0 {
 				thinkingStart = time.Now()
-				fmt.Print(ThinkingHeader.Render("💭 Thinking: "))
 			}
 			thinkingContent.WriteString(event.ReasoningDelta)
-			// Print content chunk
-			fmt.Print(event.ReasoningDelta)
+			p.publish(bus.Event{
+				Type: bus.EventThinking, SessionID: sid, MessageID: mid,
+				Payload: bus.ThinkingPayload{Delta: event.ReasoningDelta},
+			})
 
 		case llm.TypeTextDelta:
-			// Close thinking block if it was open
 			if thinkingContent.Len() > 0 {
-				duration := time.Since(thinkingStart).Round(time.Millisecond * 100)
-				// Print duration
-				fmt.Println()
-				fmt.Println(ThinkingDone.Render("✓ done (" + duration.String() + ")"))
+				durationMs := float64(time.Since(thinkingStart).Milliseconds())
+				p.publish(bus.Event{
+					Type: bus.EventThinkingDone, SessionID: sid, MessageID: mid,
+					Payload: bus.ThinkingPayload{Duration: durationMs},
+				})
 				thinkingContent.Reset()
 			}
 			if currentTextPart == nil {
 				pt := model.Part{
-					ID:        partID(),
-					SessionID: p.Message.SessionID,
-					MessageID: p.Message.ID,
-					Type:      model.PartTypeText,
+					ID: partID(), SessionID: sid, MessageID: mid,
+					Type: model.PartTypeText,
 				}
 				p.Message.Parts = append(p.Message.Parts, pt)
 				currentTextPart = &p.Message.Parts[len(p.Message.Parts)-1]
 				p.store.UpdateMessage(p.Message)
 			}
 			currentTextPart.Text += event.TextDelta
-			// Live-update the part in the store
-			p.store.UpsertPart(p.Message.SessionID, p.Message.ID, *currentTextPart)
-			fmt.Print(event.TextDelta) // stream to stdout
+			p.store.UpsertPart(sid, mid, *currentTextPart)
+			p.publish(bus.Event{
+				Type: bus.EventTextDelta, SessionID: sid, MessageID: mid,
+				Payload: bus.TextDeltaPayload{Delta: event.TextDelta},
+			})
 
 		case llm.TypeToolCallStart:
-			// Close thinking block if it was open
 			if thinkingContent.Len() > 0 {
-				duration := time.Since(thinkingStart).Round(time.Millisecond * 100)
-				fmt.Println()
-				fmt.Println(ThinkingDone.Render("✓ done (" + duration.String() + ")"))
+				durationMs := float64(time.Since(thinkingStart).Milliseconds())
+				p.publish(bus.Event{
+					Type: bus.EventThinkingDone, SessionID: sid, MessageID: mid,
+					Payload: bus.ThinkingPayload{Duration: durationMs},
+				})
 				thinkingContent.Reset()
 			}
-
 			toolArgsAcc[event.ToolCallID] = &strings.Builder{}
 			toolStartTimes[event.ToolCallID] = time.Now()
-			// Print tool with running state
-			fmt.Printf("\n%s %s\n",
-				RunningIcon.Render("●"),
-				ToolHeader.Render("Tool: "+event.ToolCallName))
+			p.publish(bus.Event{
+				Type: bus.EventToolStart, SessionID: sid, MessageID: mid,
+				Payload: bus.ToolPayload{CallID: event.ToolCallID, Tool: event.ToolCallName},
+			})
 			pt := model.Part{
-				ID:        partID(),
-				SessionID: p.Message.SessionID,
-				MessageID: p.Message.ID,
-				Type:      model.PartTypeTool,
+				ID: partID(), SessionID: sid, MessageID: mid,
+				Type: model.PartTypeTool,
 				Tool: &model.ToolPart{
 					CallID: event.ToolCallID,
 					Tool:   event.ToolCallName,
@@ -142,7 +147,6 @@ func (p *Processor) Process(
 			}
 			argsRaw := strings.TrimSpace(toolArgsAcc[event.ToolCallID].String())
 			if argsRaw == "" {
-				// Some providers only send full arguments in the final tool-done event.
 				argsRaw = strings.TrimSpace(event.ArgsDelta)
 			}
 			if argsRaw == "" {
@@ -151,20 +155,18 @@ func (p *Processor) Process(
 			var args map[string]any
 			if err := json.Unmarshal([]byte(argsRaw), &args); err != nil {
 				errMsg := fmt.Sprintf("invalid tool args JSON: %v; raw=%q", err, argsRaw)
-				fmt.Printf("%s %s\n", ErrorIcon.Render("✗"), ToolHeader.Render("Tool: "+event.ToolCallName))
-				fmt.Printf("[tool-error] %s\n", errMsg)
-
 				tp.Tool.State = model.ToolStateError
 				tp.Tool.Input = map[string]any{}
 				tp.Tool.Error = errMsg
 				tp.Tool.EndAt = time.Now()
-				p.store.UpsertPart(p.Message.SessionID, p.Message.ID, *tp)
-
+				p.store.UpsertPart(sid, mid, *tp)
+				p.publish(bus.Event{
+					Type: bus.EventToolError, SessionID: sid, MessageID: mid,
+					Payload: bus.ToolPayload{CallID: event.ToolCallID, Tool: event.ToolCallName, Output: errMsg, IsError: true},
+				})
 				toolMessages = append(toolMessages, model.ChatMessage{
-					Role:       "tool",
-					ToolCallID: event.ToolCallID,
-					Name:       event.ToolCallName,
-					Content:    errMsg,
+					Role: "tool", ToolCallID: event.ToolCallID,
+					Name: event.ToolCallName, Content: errMsg,
 				})
 				continue
 			}
@@ -172,21 +174,23 @@ func (p *Processor) Process(
 				args = map[string]any{}
 			}
 
-			// Mark running
 			tp.Tool.State = model.ToolStateRunning
 			tp.Tool.Input = args
 			tp.Tool.StartAt = time.Now()
-			p.store.UpsertPart(p.Message.SessionID, p.Message.ID, *tp)
+			p.store.UpsertPart(sid, mid, *tp)
 
-			// Doom-loop detection (same tool+args 3 times in a row)
 			if p.doomLoop(event.ToolCallName, argsRaw) {
-				fmt.Printf("\n[warn] doom loop detected for tool %s, stopping\n", event.ToolCallName)
+				errMsg := "doom loop detected"
 				tp.Tool.State = model.ToolStateError
-				tp.Tool.Error = "doom loop detected"
+				tp.Tool.Error = errMsg
 				tp.Tool.EndAt = time.Now()
-				p.store.UpsertPart(p.Message.SessionID, p.Message.ID, *tp)
+				p.store.UpsertPart(sid, mid, *tp)
 				p.Message.Finish = "stop"
 				p.store.UpdateMessage(p.Message)
+				p.publish(bus.Event{
+					Type: bus.EventToolError, SessionID: sid, MessageID: mid,
+					Payload: bus.ToolPayload{CallID: event.ToolCallID, Tool: event.ToolCallName, Output: errMsg, IsError: true},
+				})
 				return model.ProcessResultStop, nil
 			}
 
@@ -197,53 +201,44 @@ func (p *Processor) Process(
 				result = tool.Result{IsError: true, Output: fmt.Sprintf("unknown tool: %s", event.ToolCallName)}
 			} else {
 				tctx := tool.Context{
-					SessionID: p.Message.SessionID,
-					MessageID: p.Message.ID,
-					CallID:    event.ToolCallID,
-					WorkDir:   workDir,
-					Ctx:       ctx,
+					SessionID: sid, MessageID: mid,
+					CallID: event.ToolCallID, WorkDir: workDir, Ctx: ctx,
 				}
 				result, _ = t.Execute(tctx, args)
 			}
 
-			// Mark completed / error
-			startTime, hasStart := toolStartTimes[event.ToolCallID]
-			var duration string
-			if hasStart {
-				duration = time.Since(startTime).Round(time.Millisecond * 100).String()
-			}
-			if result.IsError {
-				fmt.Printf("%s %s (%s)\n",
-					ErrorIcon.Render("✗"),
-					ToolHeader.Render("Tool: "+event.ToolCallName),
-					duration)
-				fmt.Printf("[tool-error] %s\n", result.Output)
-				tp.Tool.State = model.ToolStateError
-				tp.Tool.Error = result.Output
-			} else {
-				fmt.Printf("%s %s (%s)\n",
-					SuccessIcon.Render("✓"),
-					ToolHeader.Render("Tool: "+event.ToolCallName),
-					duration)
-				// Print tool output (truncated if too long)
-				output := result.Output
-				if len(output) > 500 {
-					output = output[:500] + "\n... (truncated)"
-				}
-				fmt.Printf("%s\n", output)
-				tp.Tool.State = model.ToolStateCompleted
-				tp.Tool.Output = result.Output
-			}
+			startTime := toolStartTimes[event.ToolCallID]
+			durationMs := time.Since(startTime).Milliseconds()
 			delete(toolStartTimes, event.ToolCallID)
 			tp.Tool.EndAt = time.Now()
-			p.store.UpsertPart(p.Message.SessionID, p.Message.ID, *tp)
 
-			// Build tool result message for the next LLM turn
+			if result.IsError {
+				tp.Tool.State = model.ToolStateError
+				tp.Tool.Error = result.Output
+				p.store.UpsertPart(sid, mid, *tp)
+				p.publish(bus.Event{
+					Type: bus.EventToolError, SessionID: sid, MessageID: mid,
+					Payload: bus.ToolPayload{
+						CallID: event.ToolCallID, Tool: event.ToolCallName,
+						Input: args, Output: result.Output, IsError: true, DurationMs: durationMs,
+					},
+				})
+			} else {
+				tp.Tool.State = model.ToolStateCompleted
+				tp.Tool.Output = result.Output
+				p.store.UpsertPart(sid, mid, *tp)
+				p.publish(bus.Event{
+					Type: bus.EventToolDone, SessionID: sid, MessageID: mid,
+					Payload: bus.ToolPayload{
+						CallID: event.ToolCallID, Tool: event.ToolCallName,
+						Input: args, Output: result.Output, DurationMs: durationMs,
+					},
+				})
+			}
+
 			toolMessages = append(toolMessages, model.ChatMessage{
-				Role:       "tool",
-				ToolCallID: event.ToolCallID,
-				Name:       event.ToolCallName,
-				Content:    result.Output,
+				Role: "tool", ToolCallID: event.ToolCallID,
+				Name: event.ToolCallName, Content: result.Output,
 			})
 
 		case llm.TypeStepFinish:
@@ -252,12 +247,9 @@ func (p *Processor) Process(
 			}
 			p.Message.Tokens.Input += event.Usage.Input
 			p.Message.Tokens.Output += event.Usage.Output
-			// persist step-finish part
 			sfPart := model.Part{
-				ID:        partID(),
-				SessionID: p.Message.SessionID,
-				MessageID: p.Message.ID,
-				Type:      model.PartTypeStepFinish,
+				ID: partID(), SessionID: sid, MessageID: mid,
+				Type: model.PartTypeStepFinish,
 				StepFinish: &model.StepFinishPart{
 					Reason: event.FinishReason,
 					Tokens: event.Usage,
@@ -265,23 +257,25 @@ func (p *Processor) Process(
 			}
 			p.Message.Parts = append(p.Message.Parts, sfPart)
 			p.store.UpdateMessage(p.Message)
-			fmt.Printf("\n[step] finish_reason=%s input=%d output=%d\n",
-				event.FinishReason, event.Usage.Input, event.Usage.Output)
+			p.publish(bus.Event{
+				Type: bus.EventTurnDone, SessionID: sid, MessageID: mid,
+				Payload: bus.TurnDonePayload{FinishReason: event.FinishReason},
+			})
 
 		case llm.TypeError:
-			fmt.Printf("\n[error] LLM API error: %v\n", event.Err)
 			p.Message.Error = &model.AgentError{
-				Name:      "APIError",
-				Message:   event.Err.Error(),
-				Retryable: true,
+				Name: "APIError", Message: event.Err.Error(), Retryable: true,
 			}
 			p.store.UpdateMessage(p.Message)
+			p.publish(bus.Event{
+				Type: bus.EventTurnError, SessionID: sid, MessageID: mid,
+				Payload: bus.TurnDonePayload{FinishReason: "error"},
+			})
 			return model.ProcessResultStop, nil
 		}
 	}
 
-	// Finalise message
-	p.Message.Parts = compactTextParts(p.Message.Parts) // trim trailing newlines
+	p.Message.Parts = compactTextParts(p.Message.Parts)
 	p.store.UpdateMessage(p.Message)
 
 	if p.Message.Finish == "tool_calls" || p.Message.Finish == "tool-calls" {
@@ -290,7 +284,6 @@ func (p *Processor) Process(
 	return model.ProcessResultStop, nil
 }
 
-// doomLoop checks whether the last 3 tool parts have the same tool+args.
 func (p *Processor) doomLoop(toolName, argsRaw string) bool {
 	var count int
 	for i := len(p.Message.Parts) - 1; i >= 0; i-- {
@@ -314,7 +307,6 @@ func (p *Processor) doomLoop(toolName, argsRaw string) bool {
 	return false
 }
 
-// compactTextParts trims trailing whitespace from text parts.
 func compactTextParts(parts []model.Part) []model.Part {
 	for i := range parts {
 		if parts[i].Type == model.PartTypeText {

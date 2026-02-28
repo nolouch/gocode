@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	"github.com/nolouch/gcode/internal/agent"
+	"github.com/nolouch/gcode/internal/bus"
 	"github.com/nolouch/gcode/internal/config"
 	"github.com/nolouch/gcode/internal/llm"
 	"github.com/nolouch/gcode/internal/loop"
@@ -111,6 +112,10 @@ func run(workDir, agentName, oneShot string) error {
 		return fmt.Errorf("llm: %w", err)
 	}
 
+	// Event bus + fallback terminal printer
+	evBus := bus.New()
+	bus.SubscribeTerminal(evBus)
+
 	// Agent loop runner
 	runner := &loop.Runner{
 		Store:             store,
@@ -118,6 +123,7 @@ func run(workDir, agentName, oneShot string) error {
 		Agents:            agents,
 		Tools:             toolReg.All(),
 		SystemPromptExtra: skillPrompts,
+		Bus:               evBus,
 	}
 
 	// Create a session

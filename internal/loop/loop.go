@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/nolouch/gcode/internal/agent"
+	"github.com/nolouch/gcode/internal/bus"
 	"github.com/nolouch/gcode/internal/llm"
 	"github.com/nolouch/gcode/internal/model"
 	"github.com/nolouch/gcode/internal/processor"
@@ -32,6 +33,7 @@ type Runner struct {
 	Agents            *agent.Registry
 	Tools             map[string]tool.Tool // built-ins + MCP
 	SystemPromptExtra []string             // skill system prompt fragments
+	Bus               *bus.Bus             // event bus (nil = no events)
 }
 
 // Run executes the agent loop for the given session + user message text.
@@ -165,7 +167,7 @@ func (r *Runner) Run(ctx context.Context, sessionID string, userText string, age
 		}
 
 		// ── Process stream ─────────────────────────────────────────
-		proc := processor.New(store, asstMsg)
+		proc := processor.New(store, r.Bus, asstMsg)
 		result, toolMsgs := proc.Process(ctx, streamCh, effectiveTools, sess.Directory)
 		extraMessages = toolMsgs
 

@@ -52,8 +52,14 @@ func NewRegistry() *Registry {
 	r := &Registry{tools: make(map[string]Tool)}
 	r.Register(&ReadFileTool{})
 	r.Register(&WriteFileTool{})
+	r.Register(&EditTool{})
 	r.Register(&ListDirTool{})
+	r.Register(&GrepTool{})
+	r.Register(&GlobTool{})
 	r.Register(&BashTool{})
+	r.Register(&TodoReadTool{})
+	r.Register(&TodoWriteTool{})
+	r.Register(&WebFetchTool{})
 	return r
 }
 
