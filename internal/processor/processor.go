@@ -28,6 +28,8 @@ type Processor struct {
 	Message *model.Message
 	// Authorize optionally overrides tool policy checks.
 	Authorize func(agentName, toolName string, args map[string]any) (bool, string)
+	// RunTask optionally executes a subagent task.
+	RunTask func(ctx context.Context, req tool.TaskRequest) (tool.TaskResult, error)
 }
 
 // New creates a Processor for the given (pre-saved) assistant message.
@@ -240,6 +242,12 @@ func (p *Processor) Process(
 					SessionID: sid, MessageID: mid,
 					CallID: event.ToolCallID, Agent: p.Message.Agent,
 					WorkDir: workDir, Ctx: ctx,
+					RunTask: func(req tool.TaskRequest) (tool.TaskResult, error) {
+						if p.RunTask == nil {
+							return tool.TaskResult{}, fmt.Errorf("task runner unavailable")
+						}
+						return p.RunTask(ctx, req)
+					},
 				}
 				result, _ = t.Execute(tctx, args)
 			}

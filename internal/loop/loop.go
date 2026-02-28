@@ -200,6 +200,38 @@ func (r *Runner) Run(ctx context.Context, sessionID string, userText string, age
 		proc.Authorize = func(agentName, toolName string, args map[string]any) (bool, string) {
 			return permission.AuthorizeTool(agentName, toolName, args, ag.Permissions)
 		}
+		proc.RunTask = func(runCtx context.Context, req tool.TaskRequest) (tool.TaskResult, error) {
+			sub, ok := r.Agents.Lookup(req.Subagent)
+			if !ok {
+				return tool.TaskResult{}, fmt.Errorf("unknown agent type: %s", req.Subagent)
+			}
+			if sub.Mode == agent.ModePrimary {
+				return tool.TaskResult{}, fmt.Errorf("agent %q cannot be used as subagent", req.Subagent)
+			}
+
+			targetSessionID := strings.TrimSpace(req.TaskID)
+			if targetSessionID == "" {
+				subSession := store.CreateSession(sess.Directory)
+				subSession.DeniedTools["task"] = true
+				targetSessionID = subSession.ID
+			} else {
+				subSession, err := store.GetSession(targetSessionID)
+				if err != nil {
+					return tool.TaskResult{}, fmt.Errorf("task_id not found: %s", targetSessionID)
+				}
+				subSession.DeniedTools["task"] = true
+			}
+
+			if err := r.Run(runCtx, targetSessionID, req.Prompt, req.Subagent); err != nil {
+				return tool.TaskResult{}, err
+			}
+
+			msgs := store.Messages(targetSessionID)
+			return tool.TaskResult{
+				TaskID: targetSessionID,
+				Output: finalAssistantText(msgs),
+			}, nil
+		}
 		result, toolMsgs := proc.Process(ctx, streamCh, effectiveTools, sess.Directory)
 		extraMessages = toolMsgs
 		r.debugf("step=%d process result=%s tool_messages=%d assistant_finish=%q\n", step, result, len(toolMsgs), asstMsg.Finish)
@@ -383,4 +415,30 @@ func toolList(m map[string]tool.Tool) []tool.Tool {
 		out = append(out, t)
 	}
 	return out
+}
+
+func finalAssistantText(msgs []*model.Message) string {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		m := msgs[i]
+		if m.Role != model.RoleAssistant {
+			continue
+		}
+		if m.Error != nil {
+			continue
+		}
+		var sb strings.Builder
+		for _, p := range m.Parts {
+			if p.Type == model.PartTypeText && strings.TrimSpace(p.Text) != "" {
+				sb.WriteString(p.Text)
+			}
+		}
+		text := strings.TrimSpace(sb.String())
+		if text != "" {
+			return text
+		}
+		if strings.TrimSpace(m.Text) != "" {
+			return strings.TrimSpace(m.Text)
+		}
+	}
+	return ""
 }

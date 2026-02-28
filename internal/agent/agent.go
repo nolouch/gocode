@@ -213,6 +213,12 @@ func (r *Registry) Get(name string) *Info {
 	return r.agents["build"]
 }
 
+// Lookup returns an agent by name without fallback.
+func (r *Registry) Lookup(name string) (*Info, bool) {
+	a, ok := r.agents[name]
+	return a, ok
+}
+
 // List returns all registered agents.
 func (r *Registry) List() []*Info {
 	out := make([]*Info, 0, len(r.agents))

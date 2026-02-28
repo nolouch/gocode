@@ -18,6 +18,7 @@ type Context struct {
 	Agent     string
 	WorkDir   string
 	Ctx       context.Context
+	RunTask   func(req TaskRequest) (TaskResult, error)
 }
 
 // Result is what a tool returns.
@@ -71,6 +72,7 @@ func NewRegistry() *Registry {
 	r.Register(&TodoReadTool{})
 	r.Register(&TodoWriteTool{})
 	r.Register(&WebFetchTool{})
+	r.Register(&TaskTool{})
 	return r
 }
 
