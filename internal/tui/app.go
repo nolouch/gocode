@@ -307,7 +307,11 @@ func (m *Model) handleBusEvent(e bus.Event) []tea.Cmd {
 		}
 
 	case bus.EventThinking:
+		if p, ok := e.Payload.(bus.ThinkingPayload); ok && p.Delta != "" {
+			m.thinkingBuf.WriteString(p.Delta)
+		}
 		m.thinking = true
+		m.refreshViewport()
 
 	case bus.EventThinkingDone:
 		if p, ok := e.Payload.(bus.ThinkingPayload); ok {
@@ -354,6 +358,9 @@ func (m *Model) addUserEntry(text string) {
 	m.entries = append(m.entries, msgEntry{role: "user", content: text})
 	m.tools = make(map[string]*toolEntry)
 	m.toolOrder = nil
+	m.thinking = false
+	m.thinkingMs = 0
+	m.thinkingBuf.Reset()
 	m.refreshViewport()
 }
 
@@ -390,14 +397,19 @@ func (m *Model) renderMessages() string {
 		sb.WriteString(rendered)
 	}
 
-	// Thinking indicator
-	if m.thinking {
-		sb.WriteString(StyleThinkingLabel.Render("💭 Thinking "))
-		sb.WriteString(m.spinner.View())
-		sb.WriteString("\n")
-	} else if m.thinkingMs > 0 {
-		sb.WriteString(StyleThinkingMuted.Render(fmt.Sprintf("💭 Thought for %.0fms\n", m.thinkingMs)))
-		m.thinkingMs = 0
+	// Thinking indicator and content
+	if m.thinking || m.thinkingBuf.Len() > 0 || m.thinkingMs > 0 {
+		if m.thinking {
+			sb.WriteString(StyleThinkingLabel.Render("💭 Thinking "))
+			sb.WriteString(m.spinner.View())
+			sb.WriteString("\n")
+		} else if m.thinkingMs > 0 {
+			sb.WriteString(StyleThinkingMuted.Render(fmt.Sprintf("💭 Thought for %.0fms\n", m.thinkingMs)))
+		}
+		if t := strings.TrimSpace(m.thinkingBuf.String()); t != "" {
+			sb.WriteString(StyleThinkingMuted.Render(t))
+			sb.WriteString("\n")
+		}
 	}
 
 	// Live tool calls

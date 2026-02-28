@@ -90,6 +90,7 @@ type StreamInput struct {
 // Stream calls the LLM and returns a channel of StreamEvents.
 // The caller must drain the channel until it is closed.
 func (c *Client) Stream(input StreamInput) (<-chan StreamEvent, error) {
+	Debug("stream request: model=%s provider=%s messages=%d tools=%d system=%d max_tokens=%d", c.model.Model(), c.model.Provider(), len(input.Messages), len(input.Tools), len(input.System), input.MaxTokens)
 	call, err := c.buildCall(input)
 	if err != nil {
 		return nil, fmt.Errorf("build call: %w", err)
@@ -115,12 +116,14 @@ func (c *Client) buildCall(input StreamInput) (fantasy.Call, error) {
 	// System messages
 	for _, s := range input.System {
 		if s != "" {
+			Debug("system prompt part len=%d", len(s))
 			prompt = append(prompt, fantasy.NewSystemMessage(s))
 		}
 	}
 
 	// Conversation messages
-	for _, m := range input.Messages {
+	for i, m := range input.Messages {
+		Debug("history[%d] role=%s tool_calls=%d summary=%s", i, m.Role, len(m.ToolCalls), summarizeContent(m.Content))
 		msg, err := c.convertMessage(m)
 		if err != nil {
 			return fantasy.Call{}, fmt.Errorf("convert message: %w", err)
@@ -131,6 +134,7 @@ func (c *Client) buildCall(input StreamInput) (fantasy.Call, error) {
 	// Build tools
 	var tools []fantasy.Tool
 	for _, t := range input.Tools {
+		Debug("tool schema name=%s", t.ID())
 		tools = append(tools, fantasy.FunctionTool{
 			Name:        t.ID(),
 			Description: t.Description(),
@@ -149,6 +153,23 @@ func (c *Client) buildCall(input StreamInput) (fantasy.Call, error) {
 	}
 
 	return call, nil
+}
+
+func summarizeContent(content any) string {
+	switch c := content.(type) {
+	case string:
+		if len(c) > 80 {
+			return fmt.Sprintf("text(%d): %q...", len(c), c[:80])
+		}
+		return fmt.Sprintf("text(%d): %q", len(c), c)
+	case []interface{}:
+		return fmt.Sprintf("parts(%d)", len(c))
+	default:
+		if c == nil {
+			return "nil"
+		}
+		return fmt.Sprintf("%T", c)
+	}
 }
 
 // convertMessage converts model.ChatMessage to fantasy.Message

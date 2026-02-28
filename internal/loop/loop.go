@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -35,6 +36,7 @@ type Runner struct {
 	SystemPromptExtra []string             // skill system prompt fragments
 	Bus               *bus.Bus             // event bus (nil = no events)
 	Logf              func(format string, args ...any)
+	Debug             bool
 }
 
 func (r *Runner) logf(format string, args ...any) {
@@ -43,10 +45,17 @@ func (r *Runner) logf(format string, args ...any) {
 	}
 }
 
+func (r *Runner) debugf(format string, args ...any) {
+	if r.Debug {
+		r.logf("[debug] "+format, args...)
+	}
+}
+
 // Run executes the agent loop for the given session + user message text.
 // It blocks until the agent is done or ctx is cancelled.
 func (r *Runner) Run(ctx context.Context, sessionID string, userText string, agentName string) error {
 	store := r.Store
+	r.debugf("run start session=%s agent=%s user_len=%d\n", sessionID, agentName, len(userText))
 
 	// 1. Save the user message
 	userMsg := &model.Message{
@@ -88,6 +97,12 @@ func (r *Runner) Run(ctx context.Context, sessionID string, userText string, age
 		}
 		effectiveTools[id] = t
 	}
+	toolNames := make([]string, 0, len(effectiveTools))
+	for id := range effectiveTools {
+		toolNames = append(toolNames, id)
+	}
+	sort.Strings(toolNames)
+	r.debugf("effective tools=%d [%s]\n", len(toolNames), strings.Join(toolNames, ","))
 
 	// ─── Build base system prompt ──────────────────────────────────
 	baseSystem := buildSystemPrompt(ag, r.SystemPromptExtra, sess.Directory)
@@ -123,6 +138,7 @@ func (r *Runner) Run(ctx context.Context, sessionID string, userText string, age
 		history := buildHistory(store.Messages(sessionID))
 		history = append(history, extraMessages...)
 		extraMessages = nil
+		r.debugf("step=%d history_messages=%d\n", step, len(history))
 
 		// ── Create the assistant message placeholder ──────────────
 		asstMsg := &model.Message{
@@ -142,6 +158,7 @@ func (r *Runner) Run(ctx context.Context, sessionID string, userText string, age
 			MaxTokens: 8192,
 			Abort:     ctx,
 		}
+		r.debugf("step=%d llm stream request tools=%d system_parts=%d max_tokens=%d\n", step, len(streamInput.Tools), len(streamInput.System), streamInput.MaxTokens)
 
 		var streamCh <-chan llm.StreamEvent
 		var streamErr error
@@ -161,6 +178,7 @@ func (r *Runner) Run(ctx context.Context, sessionID string, userText string, age
 			}
 		}
 		if streamErr != nil {
+			r.debugf("step=%d llm stream failed err=%v\n", step, streamErr)
 			return fmt.Errorf("LLM stream failed: %w", streamErr)
 		}
 
@@ -168,6 +186,7 @@ func (r *Runner) Run(ctx context.Context, sessionID string, userText string, age
 		proc := processor.New(store, r.Bus, asstMsg)
 		result, toolMsgs := proc.Process(ctx, streamCh, effectiveTools, sess.Directory)
 		extraMessages = toolMsgs
+		r.debugf("step=%d process result=%s tool_messages=%d assistant_finish=%q\n", step, result, len(toolMsgs), asstMsg.Finish)
 
 		// Cross-step doom loop detection
 		if len(toolMsgs) == 1 {
@@ -197,6 +216,7 @@ func (r *Runner) Run(ctx context.Context, sessionID string, userText string, age
 		case model.ProcessResultContinue:
 			// Append assistant tool-call message to the history for the next step
 			extraMessages = append([]model.ChatMessage{buildAssistantToolCallMsg(asstMsg)}, extraMessages...)
+			r.debugf("step=%d continue with extra_messages=%d\n", step, len(extraMessages))
 			continue
 		case model.ProcessResultCompact:
 			// Simple compaction: keep only the last user message
@@ -207,6 +227,7 @@ func (r *Runner) Run(ctx context.Context, sessionID string, userText string, age
 		// Stop
 		break
 	}
+	r.debugf("run complete session=%s agent=%s\n", sessionID, agentName)
 	return nil
 }
 

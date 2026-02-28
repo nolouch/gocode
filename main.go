@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -132,6 +133,15 @@ func buildRuntime(ctx context.Context, workDir, agentName string) (*runtime, err
 
 	evBus := bus.New()
 	logFile := openLoopLogFile()
+	debugEnabled := strings.EqualFold(strings.TrimSpace(os.Getenv("LOG_LEVEL")), "debug")
+	llm.SetDebugLogger(func(format string, args ...any) {
+		if logFile == nil {
+			return
+		}
+		_, _ = fmt.Fprintf(logFile, "%s [llm][debug] ", time.Now().Format(time.RFC3339))
+		_, _ = fmt.Fprintf(logFile, format, args...)
+		_, _ = fmt.Fprintln(logFile)
+	})
 	runner := &loop.Runner{
 		Store:             store,
 		LLM:               lc,
@@ -143,9 +153,10 @@ func buildRuntime(ctx context.Context, workDir, agentName string) (*runtime, err
 			if logFile == nil {
 				return
 			}
-			_, _ = fmt.Fprintf(logFile, "%s ", time.Now().Format(time.RFC3339))
+			_, _ = fmt.Fprintf(logFile, "%s [loop] ", time.Now().Format(time.RFC3339))
 			_, _ = fmt.Fprintf(logFile, format, args...)
 		},
+		Debug: debugEnabled,
 	}
 
 	return &runtime{
