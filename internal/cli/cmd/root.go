@@ -1,4 +1,4 @@
-package main
+package cmd
 
 import (
 	"context"
@@ -12,6 +12,7 @@ import (
 
 	"github.com/nolouch/gcode/internal/agent"
 	"github.com/nolouch/gcode/internal/bus"
+	tui "github.com/nolouch/gcode/internal/cli/tui"
 	"github.com/nolouch/gcode/internal/config"
 	"github.com/nolouch/gcode/internal/llm"
 	"github.com/nolouch/gcode/internal/loop"
@@ -21,17 +22,11 @@ import (
 	"github.com/nolouch/gcode/internal/skill"
 	"github.com/nolouch/gcode/internal/storage"
 	"github.com/nolouch/gcode/internal/tool"
-	"github.com/nolouch/gcode/internal/tui"
 	"github.com/spf13/cobra"
 )
 
-func main() {
-	if err := rootCmd().Execute(); err != nil {
-		os.Exit(1)
-	}
-}
-
-func rootCmd() *cobra.Command {
+// NewRootCmd builds the CLI command tree.
+func NewRootCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "gcode",
 		Short: "gcode — Go coding agent",
@@ -39,8 +34,6 @@ func rootCmd() *cobra.Command {
 	cmd.AddCommand(tuiCmd(), serveCmd(), runCmd(), configCmd())
 	return cmd
 }
-
-// ── runtime holds all initialized components ──────────────────────────────
 
 type runtime struct {
 	cfg       *config.Config
@@ -166,8 +159,6 @@ func buildRuntime(ctx context.Context, workDir, agentName string) (*runtime, err
 	}, nil
 }
 
-// ── gcode tui (default interactive mode) ──────────────────────────────────
-
 func tuiCmd() *cobra.Command {
 	var (
 		workDir   string
@@ -189,11 +180,9 @@ func tuiCmd() *cobra.Command {
 			}
 			defer rt.Close()
 
-			// Start server in background
 			srv := server.New(server.Config{Addr: addr, SocketPath: sock}, rt.store, rt.runner, rt.evBus, rt.runner.Tools)
 			go srv.Listen(ctx)
 
-			// Launch TUI
 			return tui.Run(ctx, rt.cfg.Provider.Model, rt.agentName, workDir, addr, sock)
 		},
 	}
@@ -203,8 +192,6 @@ func tuiCmd() *cobra.Command {
 	cmd.Flags().StringVar(&sock, "socket", "", "Unix socket path (default ~/.gcode/run/gcode.sock)")
 	return cmd
 }
-
-// ── gcode serve (server-only daemon) ──────────────────────────────────────
 
 func serveCmd() *cobra.Command {
 	var (
@@ -235,8 +222,6 @@ func serveCmd() *cobra.Command {
 	cmd.Flags().StringVar(&sock, "socket", "", "Unix socket path (default ~/.gcode/run/gcode.sock)")
 	return cmd
 }
-
-// ── gcode run (one-shot non-interactive) ──────────────────────────────────
 
 func runCmd() *cobra.Command {
 	var (
@@ -271,8 +256,6 @@ func runCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&prompt, "prompt", "p", "", "Prompt to run")
 	return cmd
 }
-
-// ── gcode config ──────────────────────────────────────────────────────────
 
 func configCmd() *cobra.Command {
 	return &cobra.Command{

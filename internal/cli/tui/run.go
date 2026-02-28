@@ -13,7 +13,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/nolouch/gcode/internal/bus"
 	"github.com/nolouch/gcode/internal/model"
-	"github.com/nolouch/gcode/internal/sdk"
+	"github.com/nolouch/gcode/pkg/sdk"
 )
 
 // Run starts the Bubble Tea TUI, wiring the event bus to the model.
