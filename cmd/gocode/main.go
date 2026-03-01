@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"github.com/nolouch/opengocode/internal/cli/cmd"
+	"github.com/nolouch/gocode/internal/cli/cmd"
 )
 
 func main() {

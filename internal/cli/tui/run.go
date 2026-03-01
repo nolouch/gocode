@@ -11,7 +11,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/nolouch/opengocode/pkg/sdk"
+	"github.com/nolouch/gocode/pkg/sdk"
 )
 
 // Run starts the Bubble Tea TUI, wiring the event bus to the model.
@@ -23,7 +23,7 @@ func Run(
 ) error {
 	if socketPath == "" {
 		home, _ := os.UserHomeDir()
-		socketPath = filepath.Join(home, ".opengocode", "run", "gcode.sock")
+		socketPath = filepath.Join(home, ".gocode", "run", "gcode.sock")
 	}
 	cfg := sdk.Config{SocketPath: socketPath}
 	if serverAddr != "" {

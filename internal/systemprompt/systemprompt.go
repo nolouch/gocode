@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nolouch/opengocode/internal/agent"
+	"github.com/nolouch/gocode/internal/agent"
 )
 
 //go:embed prompts/base.txt

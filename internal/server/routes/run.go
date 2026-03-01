@@ -3,7 +3,7 @@ package routes
 import (
 	"net/http"
 
-	"github.com/nolouch/opengocode/internal/server/runs"
+	"github.com/nolouch/gocode/internal/server/runs"
 )
 
 // RegisterRuns mounts run lifecycle routes onto mux.

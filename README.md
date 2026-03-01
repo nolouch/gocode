@@ -1,10 +1,10 @@
-# opengocode
+# gocode
 
-**opengocode** 是 [opencode](https://github.com/anthropics/opencode) 的 Go 语言实现。
+**gocode** 是 [opencode](https://github.com/anthropics/opencode) 的 Go 语言实现。
 
 ## 简介
 
-opengocode 是一个 AI 编程助手，提供交互式 TUI 界面和 HTTP 服务器模式，支持多种 LLM 提供商。
+gocode 是一个 AI 编程助手，提供交互式 TUI 界面和 HTTP 服务器模式，支持多种 LLM 提供商。
 
 ## 特性
 
@@ -23,12 +23,12 @@ opengocode 是一个 AI 编程助手，提供交互式 TUI 界面和 HTTP 服务
 ### 安装
 
 ```bash
-go build ./cmd/opengocode
+go build ./cmd/gocode
 ```
 
 ### 配置
 
-创建配置文件 `~/.opengocode/config.yaml`：
+创建配置文件 `~/.gocode/config.yaml`：
 
 ```yaml
 provider:
@@ -43,24 +43,24 @@ default_agent: build
 
 ```bash
 # 启动交互式 TUI
-./opengocode tui
+./gocode tui
 
 # 运行单次命令
-./opengocode run -p "帮我创建一个 HTTP 服务器"
+./gocode run -p "帮我创建一个 HTTP 服务器"
 
 # 启动 HTTP 服务器
-./opengocode serve
+./gocode serve
 
 # 管理 MCP 服务器
-./opengocode mcp list
-./opengocode mcp auth <server-name>
+./gocode mcp list
+./gocode mcp auth <server-name>
 ```
 
 ## 架构
 
 ```
-opengocode/
-├── cmd/opengocode/       # 主程序入口
+gocode/
+├── cmd/gocode/       # 主程序入口
 ├── internal/
 │   ├── agent/           # Agent 定义和管理
 │   ├── bus/             # 事件总线
@@ -82,7 +82,7 @@ opengocode/
 
 ## 与 opencode 的对齐
 
-opengocode 完全对齐 opencode 的设计理念：
+gocode 完全对齐 opencode 的设计理念：
 
 - ✅ **Skill 系统** - 按需加载，不在启动时注入
 - ✅ **MCP 协议** - 完整支持 Tools、Prompts、Resources
@@ -96,10 +96,10 @@ opengocode 完全对齐 opencode 的设计理念：
 go test ./...
 
 # 构建
-go build ./cmd/opengocode
+go build ./cmd/gocode
 
 # 查看配置
-./opengocode config
+./gocode config
 ```
 
 ## License

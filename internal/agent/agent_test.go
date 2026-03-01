@@ -3,7 +3,7 @@ package agent
 import (
 	"testing"
 
-	"github.com/nolouch/opengocode/internal/permission"
+	"github.com/nolouch/gocode/internal/permission"
 )
 
 func TestPlanPermissions_DefaultReadOnly(t *testing.T) {

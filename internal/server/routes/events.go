@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/nolouch/opengocode/internal/bus"
+	"github.com/nolouch/gocode/internal/bus"
 )
 
 // RegisterEvents mounts the global SSE event stream onto mux.

@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/nolouch/opengocode/internal/model"
+	"github.com/nolouch/gocode/internal/model"
 )
 
 var (

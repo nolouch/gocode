@@ -17,7 +17,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nolouch/opengocode/internal/tool"
+	"github.com/nolouch/gocode/internal/tool"
 )
 
 // ServerType distinguishes local (stdio) from remote (HTTP/SSE) servers.

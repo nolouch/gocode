@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/nolouch/opengocode/internal/skill"
+	"github.com/nolouch/gocode/internal/skill"
 )
 
 // SkillTool loads skills on demand, allowing AI to access specialized

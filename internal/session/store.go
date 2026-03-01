@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nolouch/opengocode/internal/model"
+	"github.com/nolouch/gocode/internal/model"
 	"github.com/oklog/ulid/v2"
 )
 

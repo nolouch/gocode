@@ -8,8 +8,8 @@ import (
 	"fmt"
 
 	"charm.land/fantasy"
-	"github.com/nolouch/opengocode/internal/model"
-	"github.com/nolouch/opengocode/internal/tool"
+	"github.com/nolouch/gocode/internal/model"
+	"github.com/nolouch/gocode/internal/tool"
 )
 
 // Config holds provider connection details.

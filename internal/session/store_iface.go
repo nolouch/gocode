@@ -1,6 +1,6 @@
 package session
 
-import "github.com/nolouch/opengocode/internal/model"
+import "github.com/nolouch/gocode/internal/model"
 
 // StoreAPI is the shared storage contract used by runtime components.
 // It is implemented by the in-memory Store and the SQLite-backed PersistentStore.

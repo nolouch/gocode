@@ -12,8 +12,8 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"github.com/nolouch/opengocode/internal/model"
-	"github.com/nolouch/opengocode/internal/session"
+	"github.com/nolouch/gocode/internal/model"
+	"github.com/nolouch/gocode/internal/session"
 )
 
 const schema = `
@@ -78,10 +78,10 @@ func ensureSessionParentColumn(db *sql.DB) error {
 	return err
 }
 
-// DefaultPath returns ~/.opengocode/sessions.db
+// DefaultPath returns ~/.gocode/sessions.db
 func DefaultPath() string {
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".opengocode", "sessions.db")
+	return filepath.Join(home, ".gocode", "sessions.db")
 }
 
 // Close closes the database.

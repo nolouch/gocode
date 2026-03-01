@@ -3,7 +3,7 @@ package loop
 import (
 	"testing"
 
-	"github.com/nolouch/opengocode/internal/model"
+	"github.com/nolouch/gocode/internal/model"
 )
 
 func TestValidateTaskTargetSession(t *testing.T) {

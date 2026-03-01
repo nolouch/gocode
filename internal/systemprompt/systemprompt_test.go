@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nolouch/opengocode/internal/agent"
+	"github.com/nolouch/gocode/internal/agent"
 )
 
 func TestBuilder_Build(t *testing.T) {

@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"sort"
 
-	"github.com/nolouch/opengocode/internal/tool"
+	"github.com/nolouch/gocode/internal/tool"
 )
 
 type toolInfo struct {

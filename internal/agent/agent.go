@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/nolouch/opengocode/internal/permission"
+	"github.com/nolouch/gocode/internal/permission"
 )
 
 // Mode defines where an agent can be used.
