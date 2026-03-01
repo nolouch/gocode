@@ -37,9 +37,19 @@ type ServerConfig struct {
 	// Remote: URL
 	URL     string
 	Headers map[string]string
+	// OAuth configuration
+	OAuth *OAuthConfig
 	// Timeout for connecting / listing tools (default 30s)
 	TimeoutMs int
 	Enabled   bool
+}
+
+// OAuthConfig contains OAuth 2.0 configuration for a remote MCP server.
+type OAuthConfig struct {
+	ClientID     string `json:"client_id,omitempty"`
+	ClientSecret string `json:"client_secret,omitempty"`
+	Scope        string `json:"scope,omitempty"`
+	Enabled      bool   `json:"enabled"` // Default true if OAuth config exists
 }
 
 // MCPTool is a tool exposed by an MCP server.
@@ -380,8 +390,20 @@ func (c *Client) callRemote(ctx context.Context, method string, params map[strin
 		return nil, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+
+	// Add custom headers
 	for k, v := range c.cfg.Headers {
 		httpReq.Header.Set(k, v)
+	}
+
+	// Add OAuth Bearer token if configured
+	if c.cfg.OAuth != nil && c.cfg.OAuth.Enabled {
+		// Try to get access token
+		token, err := Authenticate(c.name, c.cfg)
+		if err != nil {
+			return nil, fmt.Errorf("OAuth authentication: %w", err)
+		}
+		httpReq.Header.Set("Authorization", "Bearer "+token)
 	}
 
 	resp, err := c.httpClient.Do(httpReq)
