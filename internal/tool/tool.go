@@ -73,6 +73,7 @@ func NewRegistry() *Registry {
 	r.Register(&TodoWriteTool{})
 	r.Register(&WebFetchTool{})
 	r.Register(&TaskTool{})
+	r.Register(&SkillTool{})
 	return r
 }
 

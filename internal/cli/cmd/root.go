@@ -19,7 +19,6 @@ import (
 	"github.com/nolouch/gcode/internal/mcp"
 	"github.com/nolouch/gcode/internal/server"
 	"github.com/nolouch/gcode/internal/session"
-	"github.com/nolouch/gcode/internal/skill"
 	"github.com/nolouch/gcode/internal/storage"
 	"github.com/nolouch/gcode/internal/tool"
 	"github.com/spf13/cobra"
@@ -122,15 +121,6 @@ func buildRuntime(ctx context.Context, workDir, agentName string) (*runtime, err
 		toolReg.Register(t)
 	}
 
-	skills, err := skill.Load(workDir)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "[warn] skill load error: %v\n", err)
-	}
-	var skillPrompts []string
-	if sp := skill.SystemPrompt(skills); sp != "" {
-		skillPrompts = []string{sp}
-	}
-
 	lc, err := llm.New(llm.Config{
 		ProviderName: cfg.Provider.Name,
 		BaseURL:      cfg.Provider.BaseURL,
@@ -161,7 +151,7 @@ func buildRuntime(ctx context.Context, workDir, agentName string) (*runtime, err
 		LLM:               lc,
 		Agents:            agents,
 		Tools:             toolReg.All(),
-		SystemPromptExtra: skillPrompts,
+		SystemPromptExtra: nil,
 		Bus:               evBus,
 		Logf: func(format string, args ...any) {
 			if logFile == nil {
