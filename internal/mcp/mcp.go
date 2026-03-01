@@ -98,6 +98,48 @@ type toolCallResult struct {
 	IsError bool `json:"isError"`
 }
 
+type promptListResult struct {
+	Prompts []struct {
+		Name        string         `json:"name"`
+		Description string         `json:"description"`
+		Arguments   []struct {
+			Name        string `json:"name"`
+			Description string `json:"description"`
+			Required    bool   `json:"required"`
+		} `json:"arguments,omitempty"`
+	} `json:"prompts"`
+}
+
+type promptGetResult struct {
+	Description string `json:"description,omitempty"`
+	Messages    []struct {
+		Role    string `json:"role"`
+		Content struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+	} `json:"messages"`
+}
+
+type resourceListResult struct {
+	Resources []struct {
+		URI         string `json:"uri"`
+		Name        string `json:"name"`
+		Description string `json:"description,omitempty"`
+		MimeType    string `json:"mimeType,omitempty"`
+	} `json:"resources"`
+}
+
+type resourceReadResult struct {
+	Contents []struct {
+		URI      string `json:"uri"`
+		MimeType string `json:"mimeType,omitempty"`
+		Text     string `json:"text,omitempty"`
+		Blob     string `json:"blob,omitempty"`
+	} `json:"contents"`
+}
+
+
 // ─────────────────────────────────────────────
 // Client
 // ─────────────────────────────────────────────
@@ -418,4 +460,87 @@ func sanitize(s string) string {
 		}
 	}
 	return b.String()
+}
+
+// ListPrompts returns prompts exposed by this server.
+func (c *Client) ListPrompts(ctx context.Context) (*promptListResult, error) {
+	var raw json.RawMessage
+	var err error
+	if c.cfg.Type == ServerTypeLocal {
+		raw, err = c.callLocal(ctx, "prompts/list", nil)
+	} else {
+		raw, err = c.callRemote(ctx, "prompts/list", nil)
+	}
+	if err != nil {
+		return nil, err
+	}
+	var result promptListResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// GetPrompt retrieves a specific prompt with optional arguments.
+func (c *Client) GetPrompt(ctx context.Context, name string, args map[string]string) (*promptGetResult, error) {
+	params := map[string]any{"name": name}
+	if len(args) > 0 {
+		params["arguments"] = args
+	}
+
+	var raw json.RawMessage
+	var err error
+	if c.cfg.Type == ServerTypeLocal {
+		raw, err = c.callLocal(ctx, "prompts/get", params)
+	} else {
+		raw, err = c.callRemote(ctx, "prompts/get", params)
+	}
+	if err != nil {
+		return nil, err
+	}
+	var result promptGetResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// ListResources returns resources exposed by this server.
+func (c *Client) ListResources(ctx context.Context) (*resourceListResult, error) {
+	var raw json.RawMessage
+	var err error
+	if c.cfg.Type == ServerTypeLocal {
+		raw, err = c.callLocal(ctx, "resources/list", nil)
+	} else {
+		raw, err = c.callRemote(ctx, "resources/list", nil)
+	}
+	if err != nil {
+		return nil, err
+	}
+	var result resourceListResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// ReadResource reads a specific resource by URI.
+func (c *Client) ReadResource(ctx context.Context, uri string) (*resourceReadResult, error) {
+	params := map[string]any{"uri": uri}
+
+	var raw json.RawMessage
+	var err error
+	if c.cfg.Type == ServerTypeLocal {
+		raw, err = c.callLocal(ctx, "resources/read", params)
+	} else {
+		raw, err = c.callRemote(ctx, "resources/read", params)
+	}
+	if err != nil {
+		return nil, err
+	}
+	var result resourceReadResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
 }
