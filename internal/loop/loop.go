@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -23,6 +24,7 @@ import (
 	"github.com/nolouch/gcode/internal/permission"
 	"github.com/nolouch/gcode/internal/processor"
 	"github.com/nolouch/gcode/internal/session"
+	"github.com/nolouch/gcode/internal/systemprompt"
 	"github.com/nolouch/gcode/internal/tool"
 )
 
@@ -112,7 +114,8 @@ func (r *Runner) Run(ctx context.Context, sessionID string, userText string, age
 	r.debugf("effective tools=%d [%s]\n", len(toolNames), strings.Join(toolNames, ","))
 
 	// ─── Build base system prompt ──────────────────────────────────
-	baseSystem := buildSystemPrompt(ag, r.SystemPromptExtra, sess.Directory)
+	isGitRepo := isGitRepository(sess.Directory)
+	baseSystem := buildSystemPrompt(ag, r.SystemPromptExtra, sess.Directory, isGitRepo)
 
 	// ─── Accumulated conversation history (beyond what's in the store) ─
 	// We reconstruct the full history from the store on each step so
@@ -291,28 +294,9 @@ func (r *Runner) Run(ctx context.Context, sessionID string, userText string, age
 // ─────────────────────────────────────────────────────────────────────────────
 
 // buildSystemPrompt assembles the system messages array.
-func buildSystemPrompt(ag *agent.Info, extras []string, workDir string) []string {
-	base := fmt.Sprintf(`You are gcode, an expert AI coding assistant.
-Current working directory: %s
-You can use tools to read files, write files, run commands, and explore the codebase.
-Think step-by-step. Be concise.
-
-IMPORTANT - Tool Calling Format:
-When you call a tool, you MUST provide ALL required arguments in JSON format.
-Example:
-{"name": "read", "parameters": {"path": "main.go"}}
-{"name": "list", "parameters": {"path": "."}}
-{"name": "bash", "parameters": {"command": "ls -la"}}
-
-NEVER call a tool without arguments. Always include the required parameters.`, workDir)
-
-	if ag.Prompt != "" {
-		base += "\n" + ag.Prompt
-	}
-
-	result := []string{base}
-	result = append(result, extras...)
-	return result
+func buildSystemPrompt(ag *agent.Info, extras []string, workDir string, isGitRepo bool) []string {
+	builder := systemprompt.New(workDir, isGitRepo)
+	return builder.Build(ag, extras)
 }
 
 // buildHistory converts stored messages to the ChatMessage format for the LLM.
@@ -464,4 +448,15 @@ func validateTaskTargetSession(currentSessionID, currentDir string, target *mode
 		return fmt.Errorf("task_id %s belongs to a different parent session", target.ID)
 	}
 	return nil
+}
+
+// isGitRepository checks if the given directory is inside a git repository.
+func isGitRepository(dir string) bool {
+	// Simple check: look for .git directory
+	// Could be enhanced to walk up the directory tree
+	gitDir := dir + "/.git"
+	if info, err := os.Stat(gitDir); err == nil && info.IsDir() {
+		return true
+	}
+	return false
 }
