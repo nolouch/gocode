@@ -30,7 +30,7 @@ func NewRootCmd() *cobra.Command {
 		Use:   "gcode",
 		Short: "gcode — Go coding agent",
 	}
-	cmd.AddCommand(tuiCmd(), serveCmd(), runCmd(), configCmd())
+	cmd.AddCommand(tuiCmd(), serveCmd(), runCmd(), configCmd(), mcpCmd())
 	return cmd
 }
 
