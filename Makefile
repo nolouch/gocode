@@ -1,6 +1,6 @@
 GO ?= go
-APP := gcode
-CMD := ./cmd/gcode
+APP := gocode
+CMD := ./cmd/gocode
 BIN_DIR := bin
 BIN := $(BIN_DIR)/$(APP)
 
