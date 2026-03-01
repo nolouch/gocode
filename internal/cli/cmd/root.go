@@ -29,6 +29,12 @@ func NewRootCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "gocode",
 		Short: "gocode — Go coding agent",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// Default to TUI mode when no subcommand is provided
+			tuiCmd := tuiCmd()
+			tuiCmd.SetArgs(args)
+			return tuiCmd.Execute()
+		},
 	}
 	cmd.AddCommand(tuiCmd(), serveCmd(), runCmd(), configCmd(), mcpCmd())
 	return cmd
