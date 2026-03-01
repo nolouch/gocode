@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/nolouch/gcode/internal/loop"
-	"github.com/nolouch/gcode/internal/server/runs"
-	"github.com/nolouch/gcode/internal/session"
+	"github.com/nolouch/opengocode/internal/loop"
+	"github.com/nolouch/opengocode/internal/server/runs"
+	"github.com/nolouch/opengocode/internal/session"
 )
 
 // RegisterSession mounts session and message routes onto mux.

@@ -5,14 +5,14 @@ import (
 	"path/filepath"
 )
 
-const todoFile = ".gcode/todo.md"
+const todoFile = ".opengocode/todo.md"
 
 // TodoReadTool reads the current todo list.
 type TodoReadTool struct{}
 
 func (t *TodoReadTool) ID() string { return "todo_read" }
 func (t *TodoReadTool) Description() string {
-	return "Read the current task/todo list from .gcode/todo.md."
+	return "Read the current task/todo list from .opengocode/todo.md."
 }
 func (t *TodoReadTool) Schema() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{}}
@@ -34,7 +34,7 @@ type TodoWriteTool struct{}
 
 func (t *TodoWriteTool) ID() string { return "todo_write" }
 func (t *TodoWriteTool) Description() string {
-	return "Overwrite the task/todo list in .gcode/todo.md. Use markdown checkboxes: '- [ ] task' and '- [x] done'."
+	return "Overwrite the task/todo list in .opengocode/todo.md. Use markdown checkboxes: '- [ ] task' and '- [x] done'."
 }
 func (t *TodoWriteTool) Schema() map[string]any {
 	return map[string]any{

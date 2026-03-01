@@ -17,15 +17,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nolouch/gcode/internal/agent"
-	"github.com/nolouch/gcode/internal/bus"
-	"github.com/nolouch/gcode/internal/llm"
-	"github.com/nolouch/gcode/internal/model"
-	"github.com/nolouch/gcode/internal/permission"
-	"github.com/nolouch/gcode/internal/processor"
-	"github.com/nolouch/gcode/internal/session"
-	"github.com/nolouch/gcode/internal/systemprompt"
-	"github.com/nolouch/gcode/internal/tool"
+	"github.com/nolouch/opengocode/internal/agent"
+	"github.com/nolouch/opengocode/internal/bus"
+	"github.com/nolouch/opengocode/internal/llm"
+	"github.com/nolouch/opengocode/internal/model"
+	"github.com/nolouch/opengocode/internal/permission"
+	"github.com/nolouch/opengocode/internal/processor"
+	"github.com/nolouch/opengocode/internal/session"
+	"github.com/nolouch/opengocode/internal/systemprompt"
+	"github.com/nolouch/opengocode/internal/tool"
 )
 
 const (

@@ -6,11 +6,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nolouch/gcode/internal/bus"
-	"github.com/nolouch/gcode/internal/llm"
-	"github.com/nolouch/gcode/internal/model"
-	"github.com/nolouch/gcode/internal/session"
-	"github.com/nolouch/gcode/internal/tool"
+	"github.com/nolouch/opengocode/internal/bus"
+	"github.com/nolouch/opengocode/internal/llm"
+	"github.com/nolouch/opengocode/internal/model"
+	"github.com/nolouch/opengocode/internal/session"
+	"github.com/nolouch/opengocode/internal/tool"
 )
 
 func TestProcess_UsesArgsFromToolCallDoneEvent(t *testing.T) {

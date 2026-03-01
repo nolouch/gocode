@@ -12,19 +12,19 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/nolouch/gcode/internal/agent"
-	"github.com/nolouch/gcode/internal/bus"
-	"github.com/nolouch/gcode/internal/loop"
-	"github.com/nolouch/gcode/internal/server/routes"
-	"github.com/nolouch/gcode/internal/server/runs"
-	"github.com/nolouch/gcode/internal/session"
-	"github.com/nolouch/gcode/internal/tool"
+	"github.com/nolouch/opengocode/internal/agent"
+	"github.com/nolouch/opengocode/internal/bus"
+	"github.com/nolouch/opengocode/internal/loop"
+	"github.com/nolouch/opengocode/internal/server/routes"
+	"github.com/nolouch/opengocode/internal/server/runs"
+	"github.com/nolouch/opengocode/internal/session"
+	"github.com/nolouch/opengocode/internal/tool"
 )
 
 // Config holds server startup options.
 type Config struct {
 	// SocketPath is the Unix socket path for local IPC.
-	// If empty, defaults to ~/.gcode/run/gcode.sock
+	// If empty, defaults to ~/.opengocode/run/gcode.sock
 	SocketPath string
 	// Addr is a TCP address (e.g. ":4096"). If set, TCP is used instead of Unix socket.
 	Addr string
@@ -77,7 +77,7 @@ func (s *Server) Listen(ctx context.Context) error {
 		sockPath := s.cfg.SocketPath
 		if sockPath == "" {
 			home, _ := os.UserHomeDir()
-			sockPath = filepath.Join(home, ".gcode", "run", "gcode.sock")
+			sockPath = filepath.Join(home, ".opengocode", "run", "gcode.sock")
 		}
 		if err := os.MkdirAll(filepath.Dir(sockPath), 0o755); err != nil {
 			return fmt.Errorf("server: mkdir: %w", err)

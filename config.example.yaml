@@ -1,5 +1,5 @@
-# gcode configuration file
-# Place in: .gcode/config.yaml or ~/.config/gcode/config.yaml
+# opengocode configuration file
+# Place in: .opengocode/config.yaml or ~/.config/opengocode/config.yaml
 
 provider:
   # OpenAI-compatible provider base URL

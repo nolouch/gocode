@@ -10,25 +10,25 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/nolouch/gcode/internal/agent"
-	"github.com/nolouch/gcode/internal/bus"
-	tui "github.com/nolouch/gcode/internal/cli/tui"
-	"github.com/nolouch/gcode/internal/config"
-	"github.com/nolouch/gcode/internal/llm"
-	"github.com/nolouch/gcode/internal/loop"
-	"github.com/nolouch/gcode/internal/mcp"
-	"github.com/nolouch/gcode/internal/server"
-	"github.com/nolouch/gcode/internal/session"
-	"github.com/nolouch/gcode/internal/storage"
-	"github.com/nolouch/gcode/internal/tool"
+	"github.com/nolouch/opengocode/internal/agent"
+	"github.com/nolouch/opengocode/internal/bus"
+	tui "github.com/nolouch/opengocode/internal/cli/tui"
+	"github.com/nolouch/opengocode/internal/config"
+	"github.com/nolouch/opengocode/internal/llm"
+	"github.com/nolouch/opengocode/internal/loop"
+	"github.com/nolouch/opengocode/internal/mcp"
+	"github.com/nolouch/opengocode/internal/server"
+	"github.com/nolouch/opengocode/internal/session"
+	"github.com/nolouch/opengocode/internal/storage"
+	"github.com/nolouch/opengocode/internal/tool"
 	"github.com/spf13/cobra"
 )
 
 // NewRootCmd builds the CLI command tree.
 func NewRootCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "gcode",
-		Short: "gcode — Go coding agent",
+		Use:   "opengocode",
+		Short: "opengocode — Go coding agent",
 	}
 	cmd.AddCommand(tuiCmd(), serveCmd(), runCmd(), configCmd(), mcpCmd())
 	return cmd
@@ -63,7 +63,7 @@ func openLoopLogFile() *os.File {
 	if err != nil {
 		return nil
 	}
-	logDir := filepath.Join(home, ".gcode", "logs")
+	logDir := filepath.Join(home, ".opengocode", "logs")
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
 		return nil
 	}
@@ -205,7 +205,7 @@ func tuiCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&workDir, "dir", "d", wd, "Working directory")
 	cmd.Flags().StringVarP(&agentName, "agent", "a", "build", "Agent to use")
 	cmd.Flags().StringVar(&addr, "addr", "", "TCP address to expose server (e.g. :4096); empty = Unix socket only")
-	cmd.Flags().StringVar(&sock, "socket", "", "Unix socket path (default ~/.gcode/run/gcode.sock)")
+	cmd.Flags().StringVar(&sock, "socket", "", "Unix socket path (default ~/.opengocode/run/gcode.sock)")
 	cmd.Flags().BoolVar(&attach, "attach", false, "Attach to an existing server instead of starting an embedded runtime")
 	return cmd
 }
@@ -236,7 +236,7 @@ func serveCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVarP(&workDir, "dir", "d", wd, "Working directory")
 	cmd.Flags().StringVar(&addr, "addr", "", "TCP address (e.g. :4096)")
-	cmd.Flags().StringVar(&sock, "socket", "", "Unix socket path (default ~/.gcode/run/gcode.sock)")
+	cmd.Flags().StringVar(&sock, "socket", "", "Unix socket path (default ~/.opengocode/run/gcode.sock)")
 	return cmd
 }
 

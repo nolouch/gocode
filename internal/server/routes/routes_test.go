@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nolouch/gcode/internal/agent"
-	"github.com/nolouch/gcode/internal/server/runs"
-	"github.com/nolouch/gcode/internal/session"
-	"github.com/nolouch/gcode/internal/tool"
+	"github.com/nolouch/opengocode/internal/agent"
+	"github.com/nolouch/opengocode/internal/server/runs"
+	"github.com/nolouch/opengocode/internal/session"
+	"github.com/nolouch/opengocode/internal/tool"
 )
 
 func TestSessionRoutesV1_CreateAndList(t *testing.T) {

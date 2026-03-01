@@ -8,9 +8,9 @@ import (
 	"os"
 	"testing"
 
-	"github.com/nolouch/gcode/internal/llm"
-	"github.com/nolouch/gcode/internal/model"
-	"github.com/nolouch/gcode/internal/tool"
+	"github.com/nolouch/opengocode/internal/llm"
+	"github.com/nolouch/opengocode/internal/model"
+	"github.com/nolouch/opengocode/internal/tool"
 )
 
 // TestOpenAI tests OpenAI provider as baseline

@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nolouch/gcode/internal/tool"
+	"github.com/nolouch/opengocode/internal/tool"
 )
 
 // TestSanitize tests the sanitize function for tool naming

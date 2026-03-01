@@ -1,4 +1,4 @@
-module github.com/nolouch/gcode
+module github.com/nolouch/opengocode
 
 go 1.26.0
 

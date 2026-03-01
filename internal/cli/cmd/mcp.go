@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/nolouch/gcode/internal/config"
-	"github.com/nolouch/gcode/internal/mcp"
+	"github.com/nolouch/opengocode/internal/config"
+	"github.com/nolouch/opengocode/internal/mcp"
 	"github.com/spf13/cobra"
 )
 

@@ -8,12 +8,12 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/nolouch/gcode/internal/mcp"
+	"github.com/nolouch/opengocode/internal/mcp"
 	"gopkg.in/yaml.v3"
 )
 
 // Config is the top-level configuration structure.
-// It is read from $HOME/.config/gcode/config.yaml or .gcode/config.yaml in the workspace.
+// It is read from $HOME/.config/gcode/config.yaml or .opengocode/config.yaml in the workspace.
 type Config struct {
 	// LLM provider settings
 	Provider ProviderConfig `yaml:"provider"`
@@ -87,7 +87,7 @@ func Load(workDir string) (*Config, error) {
 	cfg := Default()
 
 	candidates := []string{
-		filepath.Join(workDir, ".gcode", "config.yaml"),
+		filepath.Join(workDir, ".opengocode", "config.yaml"),
 		filepath.Join(workDir, ".opencode", "config.yaml"),
 		filepath.Join(workDir, "config.yaml"),
 		filepath.Join(os.Getenv("HOME"), ".config", "gcode", "config.yaml"),

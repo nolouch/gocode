@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nolouch/gcode/internal/session"
+	"github.com/nolouch/opengocode/internal/session"
 )
 
 type Status string

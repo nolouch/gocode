@@ -11,7 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/nolouch/gcode/pkg/sdk"
+	"github.com/nolouch/opengocode/pkg/sdk"
 )
 
 // BusEventMsg wraps an sdk.Event for delivery to the Bubble Tea update loop.

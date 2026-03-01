@@ -7,7 +7,7 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/nolouch/gcode/internal/mcp/oauth"
+	"github.com/nolouch/opengocode/internal/mcp/oauth"
 )
 
 // Authenticate performs OAuth authentication for an MCP server.

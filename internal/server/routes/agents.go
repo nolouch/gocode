@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"sort"
 
-	"github.com/nolouch/gcode/internal/agent"
+	"github.com/nolouch/opengocode/internal/agent"
 )
 
 type agentInfo struct {

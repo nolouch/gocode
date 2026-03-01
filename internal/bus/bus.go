@@ -5,7 +5,7 @@ package bus
 import (
 	"sync"
 
-	"github.com/nolouch/gcode/internal/model"
+	"github.com/nolouch/opengocode/internal/model"
 )
 
 // EventType identifies the kind of event.

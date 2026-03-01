@@ -42,16 +42,16 @@ type Store struct {
 }
 
 // NewStore creates a new OAuth credentials store.
-// Credentials are stored in ~/.gcode/mcp-auth.json
+// Credentials are stored in ~/.opengocode/mcp-auth.json
 func NewStore() (*Store, error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return nil, fmt.Errorf("get home dir: %w", err)
 	}
 
-	gcodeDir := filepath.Join(homeDir, ".gcode")
+	gcodeDir := filepath.Join(homeDir, ".opengocode")
 	if err := os.MkdirAll(gcodeDir, 0700); err != nil {
-		return nil, fmt.Errorf("create .gcode dir: %w", err)
+		return nil, fmt.Errorf("create .opengocode dir: %w", err)
 	}
 
 	filePath := filepath.Join(gcodeDir, "mcp-auth.json")
