@@ -1,105 +1,164 @@
 # gocode
 
-**gocode** 是 [opencode](https://github.com/anthropics/opencode) 的 Go 语言实现。
+`gocode` is a Go implementation of an OpenCode-style AI coding assistant.
+It includes an interactive terminal UI, a headless HTTP server, session
+persistence, a skill loader, and MCP-based tool extension.
 
-## 简介
+## What is currently implemented
 
-gocode 是一个 AI 编程助手，提供交互式 TUI 界面和 HTTP 服务器模式，支持多种 LLM 提供商。
+- Interactive TUI (`gocode tui`) backed by Bubble Tea
+- Headless server mode (`gocode serve`) with REST + SSE endpoints
+- One-shot non-interactive execution (`gocode run -p "..."`)
+- Agent loop with tool calling, retries, and basic loop guard rails
+- Built-in tools: `read`, `write`, `edit`, `list`, `glob`, `grep`, `bash`,
+  `apply_patch`, `web_fetch`, `task`, `skill`, `todo_read`, `todo_write`
+- MCP manager for local and remote servers, with MCP tools mounted into the
+  runtime at startup
+- SQLite-backed persistent sessions using `modernc.org/sqlite` (no CGO)
+- Go SDK for driving the HTTP API from other Go programs (`pkg/sdk`)
 
-## 特性
+## Quick start
 
-- 🚀 **交互式 TUI** - 基于 Bubble Tea 的终端用户界面
-- 🔧 **丰富的工具集** - 文件操作、代码编辑、Bash 执行等
-- 🔌 **MCP 支持** - 完整的 Model Context Protocol 实现
-  - 本地和远程 MCP 服务器
-  - OAuth 2.0 认证（PKCE + CSRF）
-  - Prompts 和 Resources 支持
-- 🎯 **Skill 系统** - 按需加载专业化工作流
-- 🌐 **HTTP 服务器** - RESTful API + SSE 事件流
-- 📦 **纯 Go 实现** - 无 CGO 依赖（使用 modernc.org/sqlite）
-
-## 快速开始
-
-### 安装
+### 1) Build
 
 ```bash
-go build ./cmd/gocode
+go build -o bin/gocode ./cmd/gocode
 ```
 
-### 配置
+### 2) Configure provider
 
-创建配置文件 `~/.gocode/config.yaml`：
+Copy `config.example.yaml` into one of the supported config locations and set
+your API key.
+
+Minimal config:
 
 ```yaml
 provider:
+  name: openai
   base_url: https://api.openai.com/v1
-  api_key: your-api-key
+  api_key: ${OPENAI_API_KEY}
   model: gpt-4o
 
 default_agent: build
 ```
 
-### 使用
+You can also set credentials with environment variables such as
+`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, and
+`OPENROUTER_API_KEY`.
+
+### 3) Run
 
 ```bash
-# 启动交互式 TUI
-./gocode tui
+# Start interactive terminal UI
+./bin/gocode tui
 
-# 运行单次命令
-./gocode run -p "帮我创建一个 HTTP 服务器"
+# Run a single prompt
+./bin/gocode run -p "Create a small HTTP server in Go"
 
-# 启动 HTTP 服务器
-./gocode serve
+# Start API server only
+./bin/gocode serve --addr :4096
 
-# 管理 MCP 服务器
-./gocode mcp list
-./gocode mcp auth <server-name>
+# Show effective config
+./bin/gocode config
 ```
 
-## 架构
+## Command overview
+
+- `gocode tui` - start interactive UI
+- `gocode run` - execute a single prompt and print output
+- `gocode serve` - run server without TUI
+- `gocode mcp list|status|auth|logout` - inspect or manage MCP server auth state
+- `gocode config` - print effective runtime config (API key is masked)
+
+## Documentation
+
+- `docs/cli.md` - CLI commands and common usage patterns
+- `docs/configuration.md` - config schema, load order, and env overrides
+- `docs/http-api.md` - implemented REST/SSE API endpoints and examples
+- `docs/systemprompt-optimization.md` - system prompt architecture notes
+
+## Architecture
+
+### Component Diagram
+
+```mermaid
+graph TB
+    CLI[CLI Entry<br/>cobra commands]
+
+    CLI --> TUI[TUI Mode<br/>Bubble Tea]
+    CLI --> Server[Server Mode<br/>HTTP + SSE]
+    CLI --> Run[Run Mode<br/>one-shot]
+
+    TUI --> Loop[Agent Loop]
+    Server --> Loop
+    Run --> Loop
+
+    Loop --> Processor[Stream Processor<br/>tool call handler]
+    Loop --> Session[Session Manager<br/>in-memory state]
+
+    Processor --> LLM[LLM Provider<br/>OpenAI/Anthropic/etc]
+    Processor --> Tools[Tool Registry]
+    Processor --> Bus[Event Bus<br/>pub/sub]
+
+    Tools --> BuiltIn[Built-in Tools<br/>read/write/edit/bash/etc]
+    Tools --> MCP[MCP Tools<br/>external servers]
+    Tools --> Skill[Skill Tool<br/>on-demand loading]
+
+    Skill --> SkillLoader[Skill Loader<br/>.claude/skills/]
+
+    Session --> Storage[SQLite Storage<br/>modernc.org/sqlite]
+
+    Bus --> TUI
+    Bus --> Server
+
+    SysPrompt[System Prompt Builder] --> Loop
+    Config[Config Loader<br/>YAML + env] --> Loop
+    Config --> LLM
+
+    style Loop fill:#e1f5ff
+    style Processor fill:#fff4e1
+    style Tools fill:#e8f5e9
+    style Storage fill:#fce4ec
+```
+
+### Directory Structure
 
 ```
 gocode/
-├── cmd/gocode/       # 主程序入口
-├── internal/
-│   ├── agent/           # Agent 定义和管理
-│   ├── bus/             # 事件总线
-│   ├── cli/             # CLI 和 TUI 实现
-│   ├── config/          # 配置管理
-│   ├── llm/             # LLM 提供商集成
-│   ├── loop/            # Agent 执行循环
-│   ├── mcp/             # MCP 协议实现
-│   ├── processor/       # 消息处理器
-│   ├── server/          # HTTP 服务器
-│   ├── session/         # 会话管理
-│   ├── skill/           # Skill 加载器
-│   ├── storage/         # SQLite 存储
-│   ├── systemprompt/    # 系统提示生成
-│   └── tool/            # 工具实现
-└── pkg/sdk/             # Go SDK
-
+|- cmd/gocode/         # CLI entrypoint
+|- internal/
+|  |- agent/           # Agent registry and overrides
+|  |- bus/             # Event bus
+|  |- cli/             # Cobra commands + Bubble Tea UI
+|  |- config/          # YAML + env configuration
+|  |- llm/             # Multi-provider model integration
+|  |- loop/            # Core agent execution loop
+|  |- mcp/             # MCP clients + OAuth helpers
+|  |- permission/      # Tool permission rules
+|  |- processor/       # Stream and tool-call processor
+|  |- server/          # HTTP routes and run manager
+|  |- session/         # In-memory session model
+|  |- skill/           # Skill discovery and loading
+|  |- storage/         # SQLite persistence
+|  |- systemprompt/    # System prompt builder
+|  `- tool/            # Built-in tool implementations
+`- pkg/sdk/            # Go SDK for server API
 ```
 
-## 与 opencode 的对齐
-
-gocode 完全对齐 opencode 的设计理念：
-
-- ✅ **Skill 系统** - 按需加载，不在启动时注入
-- ✅ **MCP 协议** - 完整支持 Tools、Prompts、Resources
-- ✅ **OAuth 认证** - PKCE + CSRF + 动态客户端注册
-- ✅ **模块化架构** - 清晰的职责分离
-
-## 开发
+## Development
 
 ```bash
-# 运行测试
+# Run all tests
 go test ./...
 
-# 构建
+# Build
 go build ./cmd/gocode
 
-# 查看配置
-./gocode config
+# Use Make targets
+make build
+make test
+make tui
+make serve
 ```
 
 ## License
