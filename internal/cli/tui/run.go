@@ -273,7 +273,7 @@ func Run(
 				return
 			}
 			currentSessionID = targetSessionID
-			p.Send(SessionSwitchedMsg{SessionID: targetSessionID, Entries: buildEntries(msgs), Notice: notice})
+			p.Send(SessionSwitchedMsg{SessionID: targetSessionID, Entries: buildEntries(msgs), Messages: msgs, Notice: notice})
 		}
 
 		pollRun := func(runID string) error {
@@ -325,7 +325,7 @@ func Run(
 				if err == nil && consumeStreamInconsistent() {
 					msgs, syncErr := client.GetMessages(ctx, currentSessionID)
 					if syncErr == nil {
-						p.Send(SessionSwitchedMsg{SessionID: currentSessionID, Entries: buildEntries(msgs), Notice: "synced after stream gap"})
+						p.Send(SessionSwitchedMsg{SessionID: currentSessionID, Entries: buildEntries(msgs), Messages: msgs, Notice: "synced after stream gap"})
 					}
 				}
 				p.Send(RunDoneMsg{Err: err})

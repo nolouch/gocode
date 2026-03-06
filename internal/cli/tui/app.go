@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -35,6 +36,7 @@ type SessionCommand struct {
 type SessionSwitchedMsg struct {
 	SessionID string
 	Entries   []msgEntry
+	Messages  []*sdk.Message
 	Notice    string
 	Err       error
 }
@@ -92,6 +94,17 @@ type Model struct {
 	showHelp         bool
 	statusNotice     string
 
+	// right side panel
+	sidePanelOpen  bool
+	sidePanelWidth int
+	sidePanelTab   sidePanelTab
+	fileTreeNodes  []fileTreeNode
+	fileTreeErr    string
+	reviewByPath   map[string]reviewItem
+	contextUsage   sdk.TokenUsage
+	contextTurns   int
+	stepFinishSeen map[string]struct{}
+
 	// glamour renderer
 	renderer *glamour.TermRenderer
 
@@ -130,7 +143,7 @@ func New(modelName, agentName, workDir, sessionID string, eventCh <-chan sdk.Eve
 		renderer = nil
 	}
 
-	return Model{
+	m := Model{
 		model:            modelName,
 		agentName:        agentName,
 		workDir:          workDir,
@@ -144,8 +157,15 @@ func New(modelName, agentName, workDir, sessionID string, eventCh <-chan sdk.Eve
 		turnAssistantIdx: -1,
 		reasoningPartIdx: make(map[string]int),
 		toolPartCallID:   make(map[string]string),
+		sidePanelOpen:    true,
+		sidePanelWidth:   defaultSidePanelWidth,
+		sidePanelTab:     sidePanelTabFiles,
+		reviewByPath:     make(map[string]reviewItem),
+		stepFinishSeen:   make(map[string]struct{}),
 		eventCh:          eventCh,
-	}, nil
+	}
+	m.refreshFileTree()
+	return m, nil
 }
 
 // waitForEvent returns a Cmd that waits for the next bus event.
@@ -192,11 +212,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			break
 		}
 
+		if m.handleSidePanelKey(msg) {
+			updateTextarea = false
+			break
+		}
+
 		if msg.String() == "ctrl+n" {
 			if !m.running && m.sessionCmdCh != nil {
 				select {
 				case m.sessionCmdCh <- SessionCommand{Type: SessionCommandNew}:
 				default:
+					fmt.Fprintln(os.Stderr, "warning: session command channel full, dropped New")
 				}
 			}
 			updateTextarea = false
@@ -208,6 +234,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				select {
 				case m.sessionCmdCh <- SessionCommand{Type: SessionCommandNext}:
 				default:
+					fmt.Fprintln(os.Stderr, "warning: session command channel full, dropped Next")
 				}
 			}
 			updateTextarea = false
@@ -219,6 +246,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				select {
 				case m.abortCh <- struct{}{}:
 				default:
+					fmt.Fprintln(os.Stderr, "warning: abort channel full, dropped abort")
 				}
 			}
 			updateTextarea = false
@@ -233,6 +261,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				select {
 				case m.abortCh <- struct{}{}:
 				default:
+					fmt.Fprintln(os.Stderr, "warning: abort channel full, dropped abort")
 				}
 			}
 			updateTextarea = false
@@ -309,6 +338,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.currentAssistant = ""
 		m.running = false
 		m.statusNotice = msg.Notice
+		m.reviewByPath = make(map[string]reviewItem)
+		m.contextUsage = sdk.TokenUsage{}
+		m.contextTurns = 0
+		m.stepFinishSeen = make(map[string]struct{})
+		if msg.Messages != nil {
+			m.rebuildSidePanel(msg.Messages)
+		} else {
+			m.refreshFileTree()
+		}
 		m.refreshViewport()
 	}
 
@@ -337,6 +375,11 @@ func (m *Model) handleBusEvent(e sdk.Event) []tea.Cmd {
 				m.refreshViewport()
 			case sdk.PartTypeTool:
 				m.upsertToolFromPart(p.Part)
+				m.applyToolPartToReview(p.Part)
+				m.refreshFileTree()
+				m.refreshViewport()
+			case sdk.PartTypeStepFinish:
+				m.applyStepFinishUsage(p.Part)
 				m.refreshViewport()
 			}
 		}
@@ -559,22 +602,42 @@ func (m Model) View() string {
 	}
 	header := m.renderHeader()
 	footer := m.renderFooter()
-	input := m.renderInput()
-
 	headerH := lipgloss.Height(header)
 	footerH := lipgloss.Height(footer)
+	bodyH := m.height - headerH - footerH
+	if bodyH < 1 {
+		bodyH = 1
+	}
+	mainW := m.mainContentWidth()
+	input := m.renderInput(mainW)
+	help := m.renderHelp(mainW)
 	inputH := lipgloss.Height(input)
-	vpH := m.height - headerH - footerH - inputH
+	helpH := lipgloss.Height(help)
+	vpH := bodyH - inputH - helpH
 	if vpH < 1 {
 		vpH = 1
 	}
 	m.viewport.Height = vpH
 
+	left := lipgloss.JoinVertical(lipgloss.Left,
+		m.viewport.View(),
+		help,
+		input,
+	)
+	left = lipgloss.NewStyle().
+		Width(mainW).
+		MaxWidth(mainW).
+		Height(bodyH).
+		Render(left)
+
+	body := left
+	if m.effectiveSidePanelWidth() > 0 {
+		body = lipgloss.JoinHorizontal(lipgloss.Top, left, m.renderSidePanel(bodyH))
+	}
+
 	return lipgloss.JoinVertical(lipgloss.Left,
 		header,
-		m.viewport.View(),
-		m.renderHelp(),
-		input,
+		body,
 		footer,
 	)
 }
@@ -593,9 +656,12 @@ func (m Model) renderHeader() string {
 	return StyleHeaderBorder.Width(m.width).Render(line)
 }
 
-func (m Model) renderInput() string {
-	m.textarea.SetWidth(m.width - 2)
-	return StyleInputBorder.Width(m.width).Render(m.textarea.View())
+func (m Model) renderInput(width int) string {
+	if width < 1 {
+		width = 1
+	}
+	m.textarea.SetWidth(width - 2)
+	return StyleInputBorder.Width(width).Render(m.textarea.View())
 }
 
 func (m Model) renderFooter() string {
@@ -605,9 +671,9 @@ func (m Model) renderFooter() string {
 	} else {
 		status = StyleStatusOK.Render("●") + " ready"
 	}
-	hints := StyleFooter.Render("Enter send · Shift+Enter newline · Esc interrupt · Ctrl+N new · Ctrl+L switch · Ctrl+P help · Ctrl+C quit")
+	hints := StyleFooter.Render("Enter send · Esc interrupt · Ctrl+N new · Ctrl+L switch · Ctrl+1/2/3 tabs · Alt+,/. resize · Ctrl+O panel · Ctrl+P help · Ctrl+C quit")
 	if m.statusNotice != "" {
-		hints = StyleFooter.Render(m.statusNotice + " · Enter send · Shift+Enter newline · Esc interrupt · Ctrl+N new · Ctrl+L switch · Ctrl+P help · Ctrl+C quit")
+		hints = StyleFooter.Render(m.statusNotice + " · Ctrl+1/2/3 tabs · Alt+,/. resize · Ctrl+O panel")
 	}
 	gap := m.width - lipgloss.Width(status) - lipgloss.Width(hints)
 	if gap < 1 {
@@ -617,9 +683,12 @@ func (m Model) renderFooter() string {
 	return StyleFooterBorder.Width(m.width).Render(line)
 }
 
-func (m Model) renderHelp() string {
+func (m Model) renderHelp(width int) string {
 	if !m.showHelp {
 		return ""
+	}
+	if width < 1 {
+		width = 1
 	}
 	text := "Shortcuts\n" +
 		"Enter: submit\n" +
@@ -627,9 +696,12 @@ func (m Model) renderHelp() string {
 		"Esc: interrupt current run\n" +
 		"Ctrl+N: new session\n" +
 		"Ctrl+L: switch session (cycle)\n" +
+		"Ctrl+1/2/3: side panel tabs (files/review/context)\n" +
+		"Alt+, / Alt+.: side panel width -/+\n" +
+		"Ctrl+O: toggle side panel\n" +
 		"Ctrl+C / Ctrl+D: exit (idle) or interrupt (running)\n" +
 		"Ctrl+P: toggle help"
-	return StyleInputBorder.Width(m.width).Render(text)
+	return StyleInputBorder.Width(width).Render(text)
 }
 
 func (m *Model) renderMarkdown(text string) string {
@@ -669,14 +741,15 @@ func isExitKey(msg tea.KeyMsg) bool {
 }
 
 func (m *Model) relayout() {
-	inputW := m.width - 2
+	mainW := m.mainContentWidth()
+	inputW := mainW - 2
 	if inputW < 1 {
 		inputW = 1
 	}
 	m.textarea.SetWidth(inputW)
-	m.viewport.Width = m.width
+	m.viewport.Width = mainW
 	if m.renderer != nil {
-		wrapW := m.width - 4
+		wrapW := mainW - 4
 		if wrapW < 1 {
 			wrapW = 1
 		}

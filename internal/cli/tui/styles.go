@@ -68,4 +68,36 @@ var (
 	// Status
 	StyleStatusOK  = lipgloss.NewStyle().Foreground(colorSuccess)
 	StyleStatusErr = lipgloss.NewStyle().Foreground(colorError)
+
+	// Side panel
+	StyleSidePanelBorder = lipgloss.NewStyle().
+				BorderStyle(lipgloss.NormalBorder()).
+				BorderLeft(true).
+				BorderForeground(colorBorder)
+
+	StyleSidePanelTabs = lipgloss.NewStyle().
+				Padding(0, 1)
+
+	StyleSidePanelTabActive = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("255")).
+				Background(lipgloss.Color("238")).
+				Padding(0, 1)
+
+	StyleSidePanelTabInactive = lipgloss.NewStyle().
+					Foreground(colorMuted).
+					Padding(0, 1)
+
+	StyleSidePanelTitle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(colorPrimary)
+
+	StyleSidePanelMuted = lipgloss.NewStyle().
+				Foreground(colorMuted)
+
+	StyleSidePanelChanged = lipgloss.NewStyle().
+				Foreground(colorWarning)
+
+	StyleSidePanelError = lipgloss.NewStyle().
+				Foreground(colorError)
 )
